@@ -8,7 +8,7 @@ use fs2::FileExt;
 use model::{select_assets, site_allowed, valid_note, Note};
 use serde_json::{json, Value};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs::OpenOptions,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -60,6 +60,10 @@ fn send(panel: &WebView, value: Value) {
 fn toast(panel: &WebView, message: impl Into<String>) {
     send(panel, json!({"kind":"toast","message":message.into()}));
 }
+fn gesture_notice(browser: &WebView, message: &str) {
+    let encoded = serde_json::to_string(message).unwrap_or_default();
+    let _ = browser.evaluate_script(&format!("window.__stillDockGestures?.notify({encoded});"));
+}
 fn setting(store: &SharedStore, key: &str, default: bool) -> bool {
     store
         .lock()
@@ -87,7 +91,7 @@ fn snapshot(panel: &WebView, store: &SharedStore, note: &Note, collapsed: bool, 
         panel,
         json!({"kind":"snapshot","jobs":db.jobs().unwrap_or_default(),"note":note,"collapsed":collapsed,
         "folder":db.setting("folder",""),"focus":db.setting("focus","true")=="true","ai":db.setting("ai","true")=="true",
-        "include_live":db.setting("include_live","false")=="true","comments":db.setting("comments","true")=="true","original":db.setting("original","false")=="true",
+        "gestures":db.setting("gestures","true")=="true","include_live":db.setting("include_live","false")=="true","comments":db.setting("comments","true")=="true","original":db.setting("original","false")=="true",
         "about":format!("Windows 10/11 · WebView2 · v{} · 本次运行 {:.0} 秒",env!("CARGO_PKG_VERSION"),started.elapsed().as_secs_f64())}),
     );
 }
@@ -115,6 +119,7 @@ fn enqueue(
     if !["pending", "paused", "failed"].contains(&state.as_str()) {
         return Err("任务已在进行或已经结束".into());
     }
+    store.lock().unwrap().ensure_available(&note, &id)?;
     let (signal, receiver) = watch::channel(0);
     controls.insert(id.clone(), signal);
     store.lock().unwrap().state(&id, "pending", "等待下载");
@@ -237,6 +242,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             include_str!("../assets/site.js")
         )
     );
+    let gestures = include_str!("../assets/gestures.js").replace(
+        "__GESTURES_ENABLED__",
+        if setting(&store, "gestures", true) {
+            "true"
+        } else {
+            "false"
+        },
+    );
+    let initial = format!("{initial}\n{gestures}");
     let browser = WebViewBuilder::new_with_web_context(&mut context)
         .with_url("https://www.xiaohongshu.com/explore")
         .with_bounds(Rect {
@@ -302,6 +316,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let _ = p.send_event(Message::Notify);
     });
     let mut controls: HashMap<String, watch::Sender<u8>> = HashMap::new();
+    let mut gesture_jobs: HashSet<String> = HashSet::new();
     let mut collapsed = true;
     let mut current = Note::default();
     let mut finish_exit = false;
@@ -329,11 +344,27 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 if let Ok(value)=serde_json::from_str::<Value>(&raw){match value["kind"].as_str(){
                     Some("search_start")=>{collapsed=false;layout(&window,&browser,&panel,collapsed);update=true;}
                     Some("page")=>{if let Ok(note)=serde_json::from_value::<Note>(value["note"].clone()){if site_allowed(&note.url){let newly_opened=!note.id.is_empty()&&note.id!=current.id;current=note;if newly_opened{send(&panel,json!({"kind":"current_note"}));}update=true;}}}
+                    Some("gesture_ready")=>{let _=browser.evaluate_script(&format!("window.__stillDockGestures?.setEnabled({});",setting(&store,"gestures",true)));}
+                    Some("gesture")=>{if setting(&store,"gestures",true){match value["action"].as_str(){
+                        Some("toggle_sidebar")=>{collapsed=!collapsed;layout(&window,&browser,&panel,collapsed);gesture_notice(&browser,if collapsed{"下载栏已收起"}else{"下载栏已展开"});update=true;}
+                        Some("download_current")=>{
+                            if pause_exit||finish_exit{gesture_notice(&browser,"正在退出，请稍后重试");}else if let (Ok(mut note),Some(index))=(serde_json::from_value::<Note>(value["note"].clone()),value["index"].as_u64()){
+                                if (index as usize)<note.assets.len()&&!note.assets[index as usize].video{
+                                    select_assets(&mut note,Some(&[index as usize]),setting(&store,"include_live",false));
+                                    if valid_note(&note){let root=PathBuf::from(store.lock().unwrap().setting("folder",""));let result=store.lock().unwrap().add(&note,&root);
+                                        match result{Ok(id)=>match enqueue(&store,&tx,&mut controls,id.clone()){Ok(())=>{gesture_jobs.insert(id);gesture_notice(&browser,"当前图片已加入下载队列");},Err(error)=>gesture_notice(&browser,&error)},Err(error)=>gesture_notice(&browser,&error)}
+                                    }else{gesture_notice(&browser,"当前图片尚未加载完成，请重试");}
+                                }else{gesture_notice(&browser,"无法确认当前图片，请使用侧栏选图");}
+                            }else{gesture_notice(&browser,"当前图片尚未加载完成，请重试");}update=true;
+                        }
+                        _=>{}
+                    }}}
                     _=>{}
                 }}
             }
             Event::UserEvent(Message::Notify)=>{
-                let finished:Vec<_>=store.lock().unwrap().jobs().unwrap_or_default().into_iter().filter(|j|!["pending","running","pausing","cancelling"].contains(&j.state.as_str())).map(|j|j.id).collect();for id in finished{controls.remove(&id);}
+                let finished:Vec<_>=store.lock().unwrap().jobs().unwrap_or_default().into_iter().filter(|j|!["pending","running","pausing","cancelling"].contains(&j.state.as_str())).collect();
+                for job in finished{controls.remove(&job.id);if gesture_jobs.remove(&job.id){gesture_notice(&browser,match job.state.as_str(){"done"=>"当前图片已保存","failed"=>"下载失败，可在下载栏重试","paused"=>"下载已暂停",_=>"下载已取消"});}}
                 if (finish_exit||pause_exit)&&!store.lock().unwrap().busy(){*flow=ControlFlow::Exit;}update=true;
             }
             Event::UserEvent(Message::Capture(raw,indices,include_live,expected_id,expected_urls))=>{
@@ -359,7 +390,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     "open_note"=>{if let Ok((n,_,_))=store.lock().unwrap().payload(id){if site_allowed(&n.url){let _=browser.load_url(&n.url);}}},
                     "link"=>{let url=v["url"].as_str().unwrap_or("").trim();if site_allowed(url){let _=browser.load_url(url);}else{toast(&panel,"只支持完整的 HTTPS 小红书链接");}},
                     "choose_folder"=>{if let Some(path)=rfd::FileDialog::new().set_title("选择下载文件夹").pick_folder(){let test=path.join(".xhs-write-check");match OpenOptions::new().create_new(true).write(true).open(&test){Ok(f)=>{drop(f);let _=std::fs::remove_file(test);let _=store.lock().unwrap().set_setting("folder",&path.to_string_lossy());toast(&panel,"已保存，新任务使用新目录");},Err(_)=>toast(&panel,"该目录不可写，请更换目录")}}update=true;},
-                    "setting"=>{if let Some(key)=v["key"].as_str(){if key=="include_live"{let _=store.lock().unwrap().set_setting(key,if v["value"].as_bool().unwrap_or(false){"true"}else{"false"});}else if ["focus","ai","comments","original"].contains(&key){let _=store.lock().unwrap().set_setting(key,if v["value"].as_bool().unwrap_or(false){"true"}else{"false"});let _=browser.evaluate_script(&adapters(&store));let initial=format!("window.__xhsInstallAdapters=()=>{{{}}}",adapters(&store));let _=browser.evaluate_script(&initial);toast(&panel,"已更新浏览模式");}}update=true;},
+                    "setting"=>{if let Some(key)=v["key"].as_str(){if key=="gestures"{let enabled=v["value"].as_bool().unwrap_or(true);let _=store.lock().unwrap().set_setting(key,if enabled{"true"}else{"false"});let _=browser.evaluate_script(&format!("window.__stillDockGestures?.setEnabled({enabled});"));}else if key=="include_live"{let _=store.lock().unwrap().set_setting(key,if v["value"].as_bool().unwrap_or(false){"true"}else{"false"});}else if ["focus","ai","comments","original"].contains(&key){let _=store.lock().unwrap().set_setting(key,if v["value"].as_bool().unwrap_or(false){"true"}else{"false"});let _=browser.evaluate_script(&adapters(&store));let initial=format!("window.__xhsInstallAdapters=()=>{{{}}}",adapters(&store));let _=browser.evaluate_script(&initial);toast(&panel,"已更新浏览模式");}}update=true;},
                     "pause_exit"=>{pause_exit=true;let jobs=store.lock().unwrap().jobs().unwrap_or_default();for job in jobs{control(&store,&controls,&job.id,false);}if !store.lock().unwrap().busy(){*flow=ControlFlow::Exit;}update=true;},
                     "finish_exit"=>{finish_exit=true;toast(&panel,"队列处理结束后退出");if !store.lock().unwrap().busy(){*flow=ControlFlow::Exit;}},
                     "stay"=>{finish_exit=false;},_=>{}

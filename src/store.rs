@@ -48,11 +48,33 @@ impl Store {
         )?;
         Ok(())
     }
-    pub fn add(&self, note: &Note, root: &Path) -> Result<String, String> {
-        let duplicate:i64=self.db.query_row("SELECT COUNT(*) FROM jobs WHERE note_id=? AND state IN ('pending','running','pausing','cancelling')",[&note.id],|r|r.get(0)).map_err(|e|e.to_string())?;
-        if duplicate > 0 {
-            return Err("该笔记已经在下载队列中".into());
+    pub fn ensure_available(&self, note: &Note, except_id: &str) -> Result<(), String> {
+        let mut query=self.db.prepare("SELECT payload FROM jobs WHERE note_id=? AND id<>? AND state IN ('pending','running','pausing','cancelling')").map_err(|e|e.to_string())?;
+        let rows = query
+            .query_map([note.id.as_str(), except_id], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        for row in rows {
+            let active: Note = serde_json::from_str(&row.map_err(|e| e.to_string())?)
+                .map_err(|_| "队列数据异常，请重启程序")?;
+            if note.assets.is_empty()
+                || active.assets.is_empty()
+                || note.assets.iter().any(|new| {
+                    active.assets.iter().any(|old| {
+                        new.url == old.url
+                            || (new.sequence > 0
+                                && old.sequence == new.sequence
+                                && old.video == new.video
+                                && old.live == new.live)
+                    })
+                })
+            {
+                return Err("所选图片已在下载队列中".into());
+            }
         }
+        Ok(())
+    }
+    pub fn add(&self, note: &Note, root: &Path) -> Result<String, String> {
+        self.ensure_available(note, "")?;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -143,6 +165,33 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn gesture_queue_allows_different_images_but_blocks_overlap() {
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        let mut note = Note {
+            id: "abcdef0123456789abcdef01".into(),
+            assets: vec![crate::model::Asset {
+                url: "https://sns-img-bd.xhscdn.com/a".into(),
+                sequence: 1,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let root = Path::new("D:/Downloads");
+        let first = store.add(&note, root).unwrap();
+        note.assets[0].sequence = 2;
+        note.assets[0].url = "https://sns-img-bd.xhscdn.com/b".into();
+        let second = store.add(&note, root).unwrap();
+        assert!(store.ensure_available(&note, &second).is_ok());
+        note.assets[0].sequence = 1;
+        note.assets[0].url = "https://sns-img-bd.xhscdn.com/a-new-signature".into();
+        assert!(store.add(&note, root).is_err());
+        assert_eq!(store.jobs().unwrap().len(), 2);
+        store.state(&first, "paused", "");
+        assert!(store.add(&note, root).is_ok());
+        assert!(store.ensure_available(&note, &first).is_err());
+    }
+
     #[test]
     fn attempts_are_isolated_and_active_jobs_are_not_truncated() {
         let s = Store::open(Path::new(":memory:")).unwrap();

@@ -44,6 +44,20 @@
 
 > 当前为早期预览版：未代码签名，尚未在独立 Windows 10 设备完成验证，也未完成长时间压力测试。自动化测试不能代替真实网站验收。
 
+## 右键手势
+
+在网页区域按住右键划动，松开后执行；方向提示和轨迹会在划动时显示。
+
+| 方向 | 动作 |
+| --- | --- |
+| ← 左划 | 关闭笔记，返回搜索结果 |
+| ↓ 下划 | 保存当前正在看的图片；LIVE 是否一并下载沿用开关设置 |
+| → 右划 | 展开/收起下载侧栏 |
+
+轻点右键保持原网页菜单行为。划动不足 56 CSS 像素不触发；斜划、上划、明显回折、超过 5 秒、释放在窗口外都会取消。Esc、窗口失焦或指针取消也会取消手势，Esc 不会顺带关闭笔记。输入框内或按住 Shift/Ctrl/Alt/Win 时不启用手势。
+
+设置中可关闭“启用右键手势”。当前图片无法确认时不会猜测下载，会提示使用侧栏选图。快速保存同一笔记的不同图片可分别排队；正在排队的同一张会拦截重复添加。
+
 ## 数据与隐私
 
 | 内容 | 默认位置/行为 |
@@ -78,7 +92,7 @@ git clone https://github.com/hanpeiyu/stilldock.git
 cd stilldock
 cargo fmt --check
 cargo test --locked
-node --test tests/site.test.cjs tests/panel.test.cjs tests/search.test.cjs tests/bootstrap.test.cjs tests/focus.test.cjs tests/navigation.test.cjs
+node --test tests/site.test.cjs tests/panel.test.cjs tests/search.test.cjs tests/bootstrap.test.cjs tests/focus.test.cjs tests/navigation.test.cjs tests/gestures.test.cjs
 cargo build --release --locked
 ```
 

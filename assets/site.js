@@ -87,6 +87,24 @@
     if(!id){result.assets=[];result.title='';result.author='';}
     return result;
   };
+  window.__xhsReadCurrentImage = () => {
+    const note=window.__xhsReadNote();
+    if(!note.id||!note.assets.length||note.assets.some(a=>a.video))return {error:'请先打开一篇图片笔记'};
+    const media=document.querySelector('#noteContainer .media-container,.note-detail-mask .media-container');
+    if(!media||!media.getClientRects().length||getComputedStyle(media).visibility==='hidden')return {error:'请先打开一篇图片笔记'};
+    if(note.assets.length===1)return {note,index:0};
+    const active=media?.querySelector('.swiper-slide-active');
+    const raw=active?.getAttribute('data-swiper-slide-index');
+    if(raw!==null&&raw!==undefined&&/^\d+$/.test(raw)){const index=Number(raw);if(index<note.assets.length)return {note,index};}
+    function identity(raw){try{const u=new URL(raw),parts=u.pathname.split('/').filter(Boolean);return (/^sns-webpic-/.test(u.hostname)?parts.slice(2):parts).join('/').split('!')[0];}catch{return '';}}
+    const img=active?.querySelector('img');
+    const token=identity(img?.currentSrc||img?.src||'');
+    if(token){const matches=note.assets.map((asset,index)=>({asset,index})).filter(({asset})=>[asset.url,asset.preview,asset.original_url].some(url=>url&&identity(url)===token));if(matches.length===1)return {note,index:matches[0].index};}
+    const counter=media?.querySelector('.swiper-pagination-current');
+    const number=Number(counter?.textContent?.trim());
+    if(Number.isInteger(number)&&number>=1&&number<=note.assets.length)return {note,index:number-1};
+    return {error:'暂时无法确认当前图片，请使用侧栏选图'};
+  };
   function report(){
     searchRoute();
     try{const note=window.__xhsReadNote();const value=JSON.stringify({kind:'page',note});if(value!==last){last=value;send(JSON.parse(value));}}catch{}

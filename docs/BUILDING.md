@@ -17,7 +17,7 @@
 ```powershell
 cargo fmt --check
 cargo test --locked
-node --test tests/site.test.cjs tests/panel.test.cjs tests/search.test.cjs tests/bootstrap.test.cjs tests/focus.test.cjs tests/navigation.test.cjs
+node --test tests/site.test.cjs tests/panel.test.cjs tests/search.test.cjs tests/bootstrap.test.cjs tests/focus.test.cjs tests/navigation.test.cjs tests/gestures.test.cjs
 cargo build --release --locked
 .\target\release\xhs-browser.exe
 ```
@@ -53,3 +53,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package.ps1
 - 正式发布：确认对应提交检查通过，创建 `v<版本>` tag，再以预览发布或稳定发布的形式上传匹配该 tag 的包。务必保证 Cargo.toml、tag 与二进制版本一致；目前不使用自动更新。
 
 首次仓库发布使用预览版，不能据此推断真实网站或所有 Win10 机器均已验证。
+
+## 隐藏 WebView2 手势集成测试
+
+```powershell
+cargo run --example gesture_smoke --locked
+```
+
+使用本机 WebView2，窗口隐藏、不启动 Chrome，不访问真实账号或下载平台素材。测试注入模拟 PointerEvent，检查真实 DOM、菜单事件取消、Esc、当前图序号、Live 数据与原生 IPC；它不能代替物理鼠标/触摸板的菜单时序验收。独立测试资料写入被 Git 忽略的 `target/gesture-smoke-profile`，不使用应用登录资料。CI 通过 `scripts/ensure-webview2.ps1` 检查测试运行时，缺少时安装经微软签名校验的官方 Runtime。

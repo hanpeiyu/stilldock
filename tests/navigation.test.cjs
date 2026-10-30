@@ -33,3 +33,8 @@ test('direct note entry uses a same-origin saved list and rejects external retur
 test('Escape on the list does not consume keyboard events',()=>{
   const p=boot();p.listeners.keydown({key:'Escape',preventDefault(){throw Error('should not prevent')},stopImmediatePropagation(){throw Error('should not stop')}});assert.equal(p.backCount,0);
 });
+
+test('Escape cancels an active gesture before closing a note',()=>{
+  const p=boot({initial:'/explore/'+noteId});let cancelled=0;p.window.__stillDockGestures={cancelActive(){cancelled++;return true}};
+  p.listeners.keydown({key:'Escape',preventDefault(){},stopImmediatePropagation(){}});assert.equal(cancelled,1);assert.equal(p.backCount,0);assert.equal(p.assigned,'');
+});

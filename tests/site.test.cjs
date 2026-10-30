@@ -4,15 +4,17 @@ const vm=require('node:vm');
 const fs=require('node:fs');
 const script=fs.readFileSync(require('node:path').join(__dirname,'../assets/site.js'),'utf8');
 const id='abcdef0123456789abcdef01';
-function read(path,{modal=false,stateId=id,mapKey=id,wrapped=false,images}={}){
+function read(path,{modal=false,stateId=id,mapKey=id,wrapped=false,images,current=false,slideIndex,activeSrc,counter,hiddenMedia=false}={}){
   const location=new URL('https://www.xiaohongshu.com'+path);
   const window={ipc:{postMessage(){}},__INITIAL_STATE__:{note:{currentNoteId:{value:stateId},noteDetailMap:{[mapKey]:{note:{title:'测试图集',imageList:[{urlDefault:'http://sns-img-bd.xhscdn.com/image'}]}}}}}};
   if(images)window.__INITIAL_STATE__.note.noteDetailMap[mapKey].note.imageList=images;
   if(wrapped){const note=window.__INITIAL_STATE__.note;note.noteDetailMap={value:note.noteDetailMap};window.__INITIAL_STATE__.note={value:note};}
   window.top=window;window.window=window;
-  const document={readyState:'loading',title:'小红书',querySelector:s=>modal&&s.includes('#noteContainer')?{}:null,addEventListener(){}};
-  vm.runInNewContext(script,{window,document,location,URL,history:{pushState(){},replaceState(){}},addEventListener(){},setTimeout(){}});
-  return window.__xhsReadNote();
+  const active={getAttribute:()=>slideIndex===undefined?null:String(slideIndex),querySelector:()=>activeSrc?{currentSrc:activeSrc}:null};
+  const media={getClientRects:()=>hiddenMedia?[]:[{}],querySelector:s=>s==='.swiper-slide-active'&&(slideIndex!==undefined||activeSrc)?active:s==='.swiper-pagination-current'&&counter?{textContent:String(counter)}:null};
+  const document={readyState:'loading',title:'小红书',querySelector:s=>current&&s.includes('.media-container')?media:modal&&s.includes('#noteContainer')?{}:null,addEventListener(){}};
+  vm.runInNewContext(script,{window,document,location,URL,getComputedStyle:()=>({visibility:'visible'}),history:{pushState(){},replaceState(){}},addEventListener(){},setTimeout(){}});
+  return current?window.__xhsReadCurrentImage():window.__xhsReadNote();
 }
 test('extracts notes from explore, discovery and search result routes',()=>{
   for(const path of [`/explore/${id}`,`/discovery/item/${id}`,`/search_result/${id}?xsec_token=abc`]){
@@ -46,4 +48,17 @@ test('extracts a full image candidate separately from the preview and chooses th
 test('unknown image hosts are never rewritten and untrusted LIVE URLs are rejected',()=>{
   const note=read('/explore/'+id,{images:[{urlDefault:'https://unknown.xhscdn.com/a!b',stream:{h264:[{masterUrl:'https://evil.example/video'}]}}]});
   assert.equal(note.assets[0].original_url,'');assert.equal(note.assets[0].live_url,'');
+});
+
+test('current-image extraction handles looped Swiper indices, image identity and counters',()=>{
+  const images=[{urlDefault:'https://sns-img-bd.xhscdn.com/first!small'},{urlDefault:'https://sns-img-bd.xhscdn.com/second!small'},{urlDefault:'https://sns-img-bd.xhscdn.com/third!small'}];
+  assert.equal(read('/explore/'+id,{images,current:true,slideIndex:2}).index,2);
+  assert.equal(read('/explore/'+id,{images,current:true,activeSrc:'https://sns-img-bd.xhscdn.com/second!preview'}).index,1);
+  assert.equal(read('/explore/'+id,{images,current:true,counter:3}).index,2);
+  assert.match(read('/explore/'+id,{images,current:true}).error,/无法确认/);
+  assert.equal(read('/explore/'+id,{current:true}).index,0);
+});
+
+test('a hidden or closing media container never yields a stale current image',()=>{
+  assert.match(read('/explore/'+id,{current:true,hiddenMedia:true}).error,/打开/);
 });

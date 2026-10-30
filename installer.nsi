@@ -4,7 +4,7 @@
 !include "MUI2.nsh"
 !include "x64.nsh"
 !ifndef APP_VERSION
-  !define APP_VERSION "0.2.2"
+  !define APP_VERSION "0.3.0"
 !endif
 !ifndef APP_EXE
   !define APP_EXE "target\release\xhs-browser.exe"

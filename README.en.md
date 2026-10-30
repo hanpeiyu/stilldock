@@ -29,6 +29,10 @@ Download the Windows x64 installer or portable ZIP from Releases. The installer 
 
 This is an **unsigned early preview**. A separate Windows 10 machine and long-running stress tests have not been completed. Website compatibility can change; automated tests do not establish live-site compatibility.
 
+## Mouse gestures
+
+Hold the right button and draw, then release: left returns to search, down downloads the currently visible image (respecting the Live option), right toggles the sidebar. A trail and action hint appear during the stroke. Short clicks keep the page's context menu behavior. Escape cancels without closing the note; blur, pointer cancellation, ambiguous paths, strokes over five seconds and release outside the viewport cancel too. Editable fields and modifier keys bypass gestures. Disable gestures in Settings if preferred. The downloader will not guess the current image when detection is ambiguous.
+
 ## Local data
 
 Profiles, settings and SQLite tasks use `%LOCALAPPDATA%\XhsBrowserRust`. Downloads default to `%USERPROFILE%\Downloads\XHS\<note-id>\<job-id>`. These names are retained for compatibility with earlier Rust previews. Portable means installation-free, not self-contained profile storage. Uninstalling preserves user data.
@@ -42,7 +46,7 @@ On Windows x64, install Rust stable MSVC, Visual Studio C++ Build Tools and Wind
 ```powershell
 cargo fmt --check
 cargo test --locked
-node --test tests/site.test.cjs tests/panel.test.cjs tests/search.test.cjs tests/bootstrap.test.cjs tests/focus.test.cjs tests/navigation.test.cjs
+node --test tests/site.test.cjs tests/panel.test.cjs tests/search.test.cjs tests/bootstrap.test.cjs tests/focus.test.cjs tests/navigation.test.cjs tests/gestures.test.cjs
 cargo build --release --locked
 ```
 

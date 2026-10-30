@@ -86,10 +86,12 @@
   }
   addEventListener('popstate', sync);
   document.addEventListener('keydown', event => {
-    if (event.key !== 'Escape' || event.isComposing || !noteOpen()) return;
+    if (event.key !== 'Escape' || event.isComposing) return;
+    if (window.__stillDockGestures?.cancelActive?.()) {event.preventDefault();event.stopImmediatePropagation();return;}
+    if (!noteOpen()) return;
     event.preventDefault(); event.stopImmediatePropagation(); back();
   }, true);
-  window.__stillDockNavigation = {back, sync};
+  window.__stillDockNavigation = {back, sync, isOpen:noteOpen};
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount, {once:true});
   else mount();
 })();
