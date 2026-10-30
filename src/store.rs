@@ -283,6 +283,72 @@ impl Store {
         self.db.execute("INSERT OR REPLACE INTO files(job_id,idx,path,size,width,height,format,source,sequence,live,video) VALUES(?,?,?,?,?,?,?,?,?,?,?)",params![id,index as i64,path.to_string_lossy(),record.bytes as i64,record.width as i64,record.height as i64,record.format,record.source,record.sequence as i64,record.live,record.video]).map_err(|_|"无法记录下载信息，请检查数据目录空间")?;
         Ok(())
     }
+    pub fn local_targets(&self, note_id: &str) -> Result<Vec<crate::local_files::Target>, String> {
+        let mut query = self.db.prepare("SELECT id,folder,payload FROM jobs WHERE state='done' AND (?='' OR note_id=?) ORDER BY created DESC LIMIT 200").map_err(|e|e.to_string())?;
+        let rows = query
+            .query_map([note_id, note_id], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        let mut targets = Vec::new();
+        for row in rows {
+            let (id, folder, payload) = row.map_err(|e| e.to_string())?;
+            let note: Note = serde_json::from_str(&payload).map_err(|e| e.to_string())?;
+            let mut q = self
+                .db
+                .prepare("SELECT path,size FROM files WHERE job_id=? ORDER BY idx")
+                .map_err(|e| e.to_string())?;
+            let files = q
+                .query_map([&id], |r| {
+                    Ok((
+                        PathBuf::from(r.get::<_, String>(0)?),
+                        r.get::<_, i64>(1)?.max(0) as u64,
+                    ))
+                })
+                .map_err(|e| e.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?;
+            targets.push(crate::local_files::Target {
+                id,
+                folder: folder.into(),
+                expected: note.assets.len(),
+                files,
+            });
+        }
+        Ok(targets)
+    }
+    pub fn relink(
+        &self,
+        target: &crate::local_files::Target,
+        folder: &Path,
+        paths: &[PathBuf],
+    ) -> Result<(), String> {
+        if paths.len() != target.files.len() {
+            return Err("文件记录已变化".into());
+        }
+        let tx = self.db.unchecked_transaction().map_err(|e| e.to_string())?;
+        let changed=tx.execute("UPDATE jobs SET folder=?,temp_folder=CASE WHEN layout='legacy' THEN ? ELSE ? END WHERE id=? AND state='done' AND folder=?",params![folder.to_string_lossy(),folder.to_string_lossy(),folder.join(".stilldock-cache").join(&target.id).to_string_lossy(),target.id,target.folder.to_string_lossy()]).map_err(|e|e.to_string())?;
+        if changed != 1 {
+            return Err("任务状态已变化，请等待下载完成后重新关联".into());
+        }
+        for ((old, _), new) in target.files.iter().zip(paths) {
+            if tx
+                .execute(
+                    "UPDATE files SET path=? WHERE job_id=? AND path=?",
+                    params![new.to_string_lossy(), target.id, old.to_string_lossy()],
+                )
+                .map_err(|e| e.to_string())?
+                != 1
+            {
+                return Err("文件记录已变化，请重新核对".into());
+            }
+        }
+        tx.commit().map_err(|e| e.to_string())
+    }
     pub fn busy(&self) -> bool {
         self.db.query_row("SELECT COUNT(*) FROM jobs WHERE state IN ('pending','running','pausing','cancelling')",[],|r|r.get::<_,i64>(0)).unwrap_or(0)>0
     }

@@ -65,3 +65,9 @@ GPL-3.0-only; see [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md). Extracted from 
 Settings offers per-note subfolders or flat output. Per-note output has no extra job folder; flat filenames include the title, note ID and image sequence. Final files are published without overwriting existing names. Pause/resume caches remain isolated per job in a hidden `.stilldock-cache` and empty cache directories are removed after completion.
 
 Save location, layout and JSON preference are frozen when a job is created. Existing jobs retain their paths and partial files. Old JSON files are not deleted or required for resume; legacy file dimensions can be rebuilt into SQLite. A combined metadata JSON is exported only when explicitly enabled.
+
+## Local file availability
+
+Download history and current file availability are separate. A bounded background worker checks recorded paths and byte sizes at startup, on opening a note, and on visiting history (up to 200 completed jobs). Missing or size-changed files can be repaired in the same job; intact files are skipped. Inaccessible storage is reported separately and never triggers automatic downloads.
+
+After moving a complete task's files, use **关联新目录** in history. All original filenames and sizes must match in the selected folder before paths are updated atomically. No files are moved or copied. This is not a content hash check; partial moves, renames and same-size content modifications are not detected/relinked automatically.

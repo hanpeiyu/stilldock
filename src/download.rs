@@ -230,8 +230,13 @@ async fn run(
         }
         let saved = { store.lock().unwrap().file(&work.id, index) };
         if let Some((path, size)) = saved {
+            let metadata = match std::fs::metadata(&path) {
+                Ok(m) => Some(m),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                Err(_) => return Err("原文件暂时无法访问，请检查磁盘或目录权限后重试".into()),
+            };
             if path.parent() == Some(work.folder.as_path())
-                && std::fs::metadata(&path).is_ok_and(|m| m.len() == size && size > 0)
+                && metadata.is_some_and(|m| m.is_file() && m.len() == size && size > 0)
             {
                 if !report
                     .iter()
@@ -552,6 +557,135 @@ mod tests {
             .unwrap()
             .all(|entry| !entry.unwrap().path().is_dir()));
         drop(work);
+        drop(store);
+        let _ = std::fs::remove_dir_all(root);
+    }
+    #[test]
+    fn repair_only_downloads_missing_file_and_updates_existing_history() {
+        let root = std::env::temp_dir().join(format!("stilldock-repair-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let store = Arc::new(Mutex::new(Store::open(&root.join("jobs.db")).unwrap()));
+        let (url, thread) = server(tiny_png(), false);
+        let note = Note {
+            id: "abcdef0123456789abcdef03".into(),
+            title: "repair".into(),
+            assets: vec![
+                Asset {
+                    url: "https://sns-img-bd.xhscdn.com/must-not-request".into(),
+                    sequence: 1,
+                    ..Default::default()
+                },
+                Asset {
+                    url,
+                    sequence: 2,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let id = store.lock().unwrap().add(&note, &root).unwrap();
+        let (_, folder, _) = store.lock().unwrap().payload(&id).unwrap();
+        std::fs::create_dir_all(&folder).unwrap();
+        let data = tiny_png();
+        let good = folder.join("keep.png");
+        let gone = folder.join("gone.png");
+        std::fs::write(&good, &data).unwrap();
+        std::fs::write(&gone, &data).unwrap();
+        for (index, path) in [&good, &gone].into_iter().enumerate() {
+            store
+                .lock()
+                .unwrap()
+                .file_done(
+                    &id,
+                    index,
+                    path,
+                    &SavedFile {
+                        index,
+                        sequence: index + 1,
+                        live: false,
+                        video: false,
+                        filename: path.file_name().unwrap().to_string_lossy().into(),
+                        bytes: data.len() as u64,
+                        width: 2,
+                        height: 3,
+                        format: "png".into(),
+                        source: "high_resolution".into(),
+                    },
+                )
+                .unwrap();
+        }
+        store.lock().unwrap().state(&id, "done", "下载完成");
+        std::fs::remove_file(&gone).unwrap();
+        let target = store
+            .lock()
+            .unwrap()
+            .local_targets(&note.id)
+            .unwrap()
+            .remove(0);
+        let status = crate::local_files::check(&target);
+        assert_eq!((status.present, status.missing), (1, 1));
+        let options = store.lock().unwrap().download_options(&id).unwrap();
+        let (_tx, rx) = watch::channel(0);
+        let mut work = Work {
+            id: id.clone(),
+            note,
+            folder: folder.clone(),
+            options,
+            control: rx,
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime
+            .block_on(run(&reqwest::Client::new(), &store, &mut work, &|| {}))
+            .unwrap();
+        thread.join().unwrap();
+        store.lock().unwrap().state(&id, "done", "下载完成");
+        let targets = store.lock().unwrap().local_targets("").unwrap();
+        assert_eq!(targets.len(), 1);
+        let status = crate::local_files::check(&targets[0]);
+        assert_eq!((status.present, status.missing, status.changed), (2, 0, 0));
+        assert_eq!(store.lock().unwrap().file(&id, 0).unwrap().0, good);
+        assert_eq!(std::fs::read(&good).unwrap(), data);
+        assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 2);
+        let relocated = root.join("organized");
+        std::fs::create_dir_all(&relocated).unwrap();
+        let target = &targets[0];
+        for (old, _) in &target.files {
+            std::fs::rename(old, relocated.join(old.file_name().unwrap())).unwrap();
+        }
+        let paths = crate::local_files::relocated(target, &relocated).unwrap();
+        std::fs::write(&paths[1], b"wrong size").unwrap();
+        assert!(crate::local_files::relocated(target, &relocated).is_err());
+        assert_eq!(store.lock().unwrap().payload(&id).unwrap().1, folder);
+        std::fs::write(&paths[1], tiny_png()).unwrap();
+        store.lock().unwrap().state(&id, "pending", "");
+        assert!(store
+            .lock()
+            .unwrap()
+            .relink(target, &relocated, &paths)
+            .is_err());
+        assert_eq!(store.lock().unwrap().file(&id, 0).unwrap().0, good);
+        store.lock().unwrap().state(&id, "done", "");
+        store
+            .lock()
+            .unwrap()
+            .relink(target, &relocated, &paths)
+            .unwrap();
+        assert_eq!(store.lock().unwrap().payload(&id).unwrap().1, relocated);
+        assert_eq!(
+            store
+                .lock()
+                .unwrap()
+                .download_options(&id)
+                .unwrap()
+                .temp_folder,
+            relocated.join(".stilldock-cache").join(&id)
+        );
+        let target = store.lock().unwrap().local_targets("").unwrap().remove(0);
+        assert_eq!(crate::local_files::check(&target).present, 2);
+        assert_eq!(std::fs::read(&paths[0]).unwrap(), data);
         drop(store);
         let _ = std::fs::remove_dir_all(root);
     }

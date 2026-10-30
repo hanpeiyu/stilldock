@@ -60,3 +60,9 @@ Asset 包含网页 URL、高清候选、缩略图、Live 视频地址及笔记�
 `jobs.layout/temp_folder/export_json` 固定每次任务的保存方式、缓存位置与导出选项。旧任务通过加列迁移标记为 `legacy`，保留原目录与 `.part` 路径。`files` 增加尺寸、格式、资源来源、原图序号和 Live 标记，续传不再依赖目录中的 JSON。旧文件缺少元数据时从实际文件恢复尺寸，不覆盖旧 JSON。
 
 新任务缓存位于最终目录内的隐藏 `.stilldock-cache/<任务ID>`，使缓存和素材保持同卷，避免跨磁盘复制。Windows 使用不替换目标的 MoveFileW 发布文件，遇到重名另选后缀；不同笔记平铺也不会覆盖用户文件。完成后仅清理空缓存目录，不递归删除用户内容。可选 JSON 汇总导出失败不会抹去已保存素材和数据库记录。
+
+## Local availability and relocation
+
+`local_files.rs` inspects only recorded paths and byte sizes on one background worker. A bounded channel allows at most one pending request; local status is separate from persisted job completion and bounded to visible recent history. Database locks are released before filesystem checks. Startup/history checks are bounded to 200 completed tasks; opening a note requests a targeted check.
+
+Repair reuses the existing job and fixed storage options. The transfer loop rechecks each saved file before skipping; non-NotFound IO errors stop the task. Relocation is explicit, requires all filenames/sizes to match, and updates job folder, cache path and file paths in one SQLite transaction guarded by completed state and original folder. No watcher, recursive disk scan, automatic deletion, or content-hash guarantee is introduced.

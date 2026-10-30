@@ -8,12 +8,15 @@ function panel(){
   const elements=new Map(),sent=[];
   function element(tag='div'){
     const e={tag,children:[],dataset:{},style:{},value:'',checked:false,hidden:false,classList:{toggle(){}},setAttribute(k,v){this[k]=v},removeAttribute(k){delete this[k];if(k==='data-src')delete this.dataset.src},addEventListener(){},replaceChildren(...items){this.children=items},append(...items){this.children.push(...items)},remove(){},showModal(){this.open=true},close(){this.open=false}};
-    e.querySelectorAll=s=>{const found=[];function visit(node){for(const child of node.children||[]){if(typeof child==='object'){if(s==='input'&&child.tag==='input'||s==='input:checked'&&child.tag==='input'&&child.checked||s==='img[data-src]'&&child.tag==='img'&&child.dataset.src)found.push(child);visit(child);}}}visit(e);return found};return e;
+    e.querySelector=s=>s==='.bar span'?(e.barSpan||=(element('span'))):e.children.find(child=>(child.className||'').split(' ').includes(s.slice(1)));
+    Object.defineProperty(e,'innerHTML',{set(value){this.children=[...value.matchAll(/class="([^"]+)"/g)].map(m=>{const child=element();child.className=m[1];return child;});}});
+    e.insertBefore=(child,before)=>{const old=e.children.indexOf(child);if(old>=0)e.children.splice(old,1);const index=e.children.indexOf(before);if(index>=0)e.children.splice(index,0,child);else e.children.push(child);};
+    e.querySelectorAll=s=>{if(s==='.job')return e.children.filter(child=>child.className==='job');const found=[];function visit(node){for(const child of node.children||[]){if(typeof child==='object'){if(s==='input'&&child.tag==='input'||s==='input:checked'&&child.tag==='input'&&child.checked||s==='img[data-src]'&&child.tag==='img'&&child.dataset.src)found.push(child);visit(child);}}}visit(e);return found};return e;
   }
   const document={getElementById(id){if(!elements.has(id))elements.set(id,element());return elements.get(id)},createElement:element,createTextNode:s=>s,querySelectorAll:()=>[],body:element()};
   const window={ipc:{postMessage:raw=>sent.push(JSON.parse(raw))}};
   vm.runInNewContext(html.match(/<script>([\s\S]*?)<\/script>/)[1],{window,document,setTimeout:()=>1,clearTimeout(){}});
-  const snapshot=note=>window.receive({kind:'snapshot',jobs:[],note,collapsed:false,folder:'D:/Downloads',focus:true,ai:true,comments:true,original:false,about:'test'});
+  const snapshot=(note,extra={})=>window.receive({kind:'snapshot',jobs:[],note,collapsed:false,folder:'D:/Downloads',focus:true,ai:true,comments:true,original:false,about:'test',...extra});
   return {elements,sent,snapshot,receive:window.receive};
 }
 test('download stays disabled on the feed but can retry extraction for an opened note',()=>{
@@ -61,4 +64,20 @@ test('save layout and optional JSON controls send typed settings and show defaul
   const p=panel();p.snapshot({});assert.equal(p.elements.get('output_layout').value,'note');assert.equal(p.elements.get('export_json').checked,false);
   const layout=p.elements.get('output_layout');layout.value='flat';layout.onchange();assert.deepEqual(p.sent.at(-1),{action:'setting',key:'output_layout',value:'flat'});
   const json=p.elements.get('export_json');json.checked=true;json.onchange();assert.deepEqual(p.sent.at(-1),{action:'setting',key:'export_json',value:true});
+});
+
+test('local file state stays separate from download history and repair is blocked for unavailable storage',()=>{
+  const p=panel(),note={id:'note',assets:[]},job={id:'job',note_id:'note',state:'done',title:'old',message:'下载完成'};
+  p.snapshot(note,{jobs:[job],local:{job:{present:2,missing:1,changed:0,unavailable:0}}});
+  assert.equal(p.elements.get('local-note').textContent,'本地存在 2 项 · 缺失 1 项');
+  assert.equal(p.elements.get('repair-current').hidden,false);
+  p.elements.get('repair-current').onclick();assert.deepEqual(p.sent.at(-1),{action:'repair',id:'job'});
+  const article=p.elements.get('history-jobs').children[0];
+  assert.equal(article.querySelector('.state').textContent,'已完成');
+  assert.equal(article.querySelector('.actions').children.some(b=>b.textContent==='补下缺失 / 异常项'),true);
+  p.snapshot(note,{jobs:[job],local:{job:{present:0,missing:1,changed:0,unavailable:2}}});
+  assert.match(p.elements.get('local-note').textContent,/暂时无法访问 2 项/);
+  assert.equal(p.elements.get('repair-current').hidden,true);
+  assert.equal(article.querySelector('.actions').children.some(b=>b.textContent==='补下缺失 / 异常项'),false);
+  p.elements.get('check-local').onclick();assert.deepEqual(p.sent.at(-1),{action:'check_local'});
 });

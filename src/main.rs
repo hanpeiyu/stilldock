@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod download;
 mod file_ops;
+mod local_files;
 mod model;
 mod store;
 
@@ -34,9 +35,16 @@ enum Message {
     Site(String),
     Capture(String, Option<Vec<usize>>, bool, String, Vec<String>),
     Notify,
+    LocalChecked(Vec<(String, local_files::Status)>),
+    Relinked(Result<(), String>),
     Navigate(String),
     Open(String),
     Loaded,
+}
+
+enum LocalRequest {
+    Check(String),
+    Relink(String, PathBuf),
 }
 
 fn layout(window: &Window, browser: &WebView, panel: &WebView, collapsed: bool) {
@@ -86,11 +94,18 @@ fn adapters(store: &SharedStore) -> String {
     );
     format!("{ai}\n{focus}")
 }
-fn snapshot(panel: &WebView, store: &SharedStore, note: &Note, collapsed: bool, started: Instant) {
+fn snapshot(
+    panel: &WebView,
+    store: &SharedStore,
+    note: &Note,
+    collapsed: bool,
+    started: Instant,
+    local: &HashMap<String, local_files::Status>,
+) {
     let db = store.lock().unwrap();
     send(
         panel,
-        json!({"kind":"snapshot","jobs":db.jobs().unwrap_or_default(),"note":note,"collapsed":collapsed,
+        json!({"kind":"snapshot","local":local,"jobs":db.jobs().unwrap_or_default(),"note":note,"collapsed":collapsed,
         "output_layout":db.setting("output_layout","note"),"export_json":db.setting("export_json","false")=="true","folder":db.setting("folder",""),"focus":db.setting("focus","true")=="true","ai":db.setting("ai","true")=="true",
         "gestures":db.setting("gestures","true")=="true","include_live":db.setting("include_live","false")=="true","comments":db.setting("comments","true")=="true","original":db.setting("original","false")=="true",
         "about":format!("Windows 10/11 · WebView2 · v{} · 本次运行 {:.0} 秒",env!("CARGO_PKG_VERSION"),started.elapsed().as_secs_f64())}),
@@ -118,7 +133,7 @@ fn enqueue(
     if !valid_note(&note) {
         return Err("任务中的媒体地址无效，请重新打开笔记".into());
     }
-    if !["pending", "paused", "failed"].contains(&state.as_str()) {
+    if !["pending", "paused", "failed", "done"].contains(&state.as_str()) {
         return Err("任务已在进行或已经结束".into());
     }
     store.lock().unwrap().ensure_available(&note, &id)?;
@@ -318,6 +333,48 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let tx = download::start(store.clone(), move || {
         let _ = p.send_event(Message::Notify);
     });
+    let (check_tx, check_rx) = std::sync::mpsc::sync_channel::<LocalRequest>(1);
+    let check_store = store.clone();
+    let check_proxy = proxy.clone();
+    std::thread::spawn(move || {
+        while let Ok(request) = check_rx.recv() {
+            let note_id = match request {
+                LocalRequest::Check(note_id) => note_id,
+                LocalRequest::Relink(id, folder) => {
+                    let result = (|| {
+                        let target = {
+                            check_store
+                                .lock()
+                                .unwrap()
+                                .local_targets("")?
+                                .into_iter()
+                                .find(|t| t.id == id)
+                                .ok_or("任务不存在或正在下载")?
+                        };
+                        let paths = local_files::relocated(&target, &folder)?;
+                        check_store.lock().unwrap().relink(&target, &folder, &paths)
+                    })();
+                    let _ = check_proxy.send_event(Message::Relinked(result));
+                    String::new()
+                }
+            };
+            let targets = { check_store.lock().unwrap().local_targets(&note_id) };
+            if let Ok(targets) = targets {
+                let results = targets
+                    .iter()
+                    .map(|target| (target.id.clone(), local_files::check(target)))
+                    .collect();
+                if check_proxy
+                    .send_event(Message::LocalChecked(results))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        }
+    });
+    let mut local: HashMap<String, local_files::Status> = HashMap::new();
+    let _ = check_tx.try_send(LocalRequest::Check(String::new()));
     let mut controls: HashMap<String, watch::Sender<u8>> = HashMap::new();
     let mut gesture_jobs: HashSet<String> = HashSet::new();
     let mut collapsed = true;
@@ -334,7 +391,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             Event::WindowEvent{event:WindowEvent::Resized(_),..}=>layout(&window,&browser,&panel,collapsed),
             Event::WindowEvent{event:WindowEvent::ScaleFactorChanged{..},..}=>layout(&window,&browser,&panel,collapsed),
             Event::WindowEvent{event:WindowEvent::CloseRequested,..}=>{
-                if store.lock().unwrap().busy(){collapsed=false;layout(&window,&browser,&panel,collapsed);snapshot(&panel,&store,&current,collapsed,started);send(&panel,json!({"kind":"close"}));}else{*flow=ControlFlow::Exit;}
+                if store.lock().unwrap().busy(){collapsed=false;layout(&window,&browser,&panel,collapsed);snapshot(&panel,&store,&current,collapsed,started,&local);send(&panel,json!({"kind":"close"}));}else{*flow=ControlFlow::Exit;}
             }
             Event::UserEvent(Message::Loaded)=>{
                 update=true;
@@ -346,7 +403,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             Event::UserEvent(Message::Site(raw))=>{
                 if let Ok(value)=serde_json::from_str::<Value>(&raw){match value["kind"].as_str(){
                     Some("search_start")=>{collapsed=false;layout(&window,&browser,&panel,collapsed);update=true;}
-                    Some("page")=>{if let Ok(note)=serde_json::from_value::<Note>(value["note"].clone()){if site_allowed(&note.url){let newly_opened=!note.id.is_empty()&&note.id!=current.id;current=note;if newly_opened{send(&panel,json!({"kind":"current_note"}));}update=true;}}}
+                    Some("page")=>{if let Ok(note)=serde_json::from_value::<Note>(value["note"].clone()){if site_allowed(&note.url){let newly_opened=!note.id.is_empty()&&note.id!=current.id;current=note;if newly_opened{send(&panel,json!({"kind":"current_note"}));let _=check_tx.try_send(LocalRequest::Check(current.id.clone()));}update=true;}}}
                     Some("gesture_ready")=>{let _=browser.evaluate_script(&format!("window.__stillDockGestures?.setEnabled({});",setting(&store,"gestures",true)));}
                     Some("gesture")=>{if setting(&store,"gestures",true){match value["action"].as_str(){
                         Some("toggle_sidebar")=>{collapsed=!collapsed;layout(&window,&browser,&panel,collapsed);gesture_notice(&browser,if collapsed{"下载栏已收起"}else{"下载栏已展开"});update=true;}
@@ -365,9 +422,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     _=>{}
                 }}
             }
+            Event::UserEvent(Message::Relinked(result))=>{match result{Ok(())=>toast(&panel,"已按文件名和大小关联新目录，未移动文件"),Err(error)=>toast(&panel,error)}update=true;}
+            Event::UserEvent(Message::LocalChecked(results))=>{let completed:HashSet<_>=store.lock().unwrap().jobs().unwrap_or_default().into_iter().filter(|j|j.state=="done").map(|j|j.id).collect();local.retain(|id,_|completed.contains(id));for (id,status) in results{if completed.contains(&id){local.insert(id,status);}}update=true;}
             Event::UserEvent(Message::Notify)=>{
                 let finished:Vec<_>=store.lock().unwrap().jobs().unwrap_or_default().into_iter().filter(|j|!["pending","running","pausing","cancelling"].contains(&j.state.as_str())).collect();
-                for job in finished{controls.remove(&job.id);if gesture_jobs.remove(&job.id){gesture_notice(&browser,match job.state.as_str(){"done"=>"当前图片已保存","failed"=>"下载失败，可在下载栏重试","paused"=>"下载已暂停",_=>"下载已取消"});}}
+                let mut recheck=false;for job in finished{if controls.remove(&job.id).is_some(){local.remove(&job.id);recheck=true;}if gesture_jobs.remove(&job.id){gesture_notice(&browser,match job.state.as_str(){"done"=>"当前图片已保存","failed"=>"下载失败，可在下载栏重试","paused"=>"下载已暂停",_=>"下载已取消"});}}
+                if recheck{let _=check_tx.try_send(LocalRequest::Check(String::new()));}
                 if (finish_exit||pause_exit)&&!store.lock().unwrap().busy(){*flow=ControlFlow::Exit;}update=true;
             }
             Event::UserEvent(Message::Capture(raw,indices,include_live,expected_id,expected_urls))=>{
@@ -381,6 +441,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             Event::UserEvent(Message::Ui(raw))=>{
                 if let Ok(v)=serde_json::from_str::<Value>(&raw){let id=v["id"].as_str().unwrap_or("");match v["action"].as_str().unwrap_or(""){
                     "ready"=>update=true,
+                    "check_local"=>{let _=check_tx.try_send(LocalRequest::Check(String::new()));toast(&panel,"正在后台核对本地文件…");},
+                    "relink"=>{if let Some(folder)=rfd::FileDialog::new().set_title("选择移动后的素材文件夹（按原文件名和大小核对）").pick_folder(){if check_tx.try_send(LocalRequest::Relink(id.to_owned(),folder)).is_err(){toast(&panel,"正在核对文件，请稍后重新关联");}else{toast(&panel,"正在核对新目录，全部匹配后更新关联…");}}},
+                    "repair"=>{if !pause_exit&&!finish_exit&&local.get(id).is_some_and(|s|s.repairable()){
+                        match enqueue(&store,&tx,&mut controls,id.to_owned()){Ok(())=>{local.remove(id);toast(&panel,"已加入补下队列，现有文件将跳过");},Err(e)=>toast(&panel,e)}
+                    }else{toast(&panel,"请先核对文件，并确认保存目录可以访问");}update=true;},
                     "toggle"=>{collapsed=!collapsed;layout(&window,&browser,&panel,collapsed);update=true;},
                     "home"=>{let _=browser.load_url("https://www.xiaohongshu.com/explore");},
                     "back"=>{let _=browser.go_back();},"forward"=>{let _=browser.go_forward();},"reload"=>{let _=browser.reload();},
@@ -389,7 +454,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     "resume"=>{if !pause_exit{if let Err(e)=enqueue(&store,&tx,&mut controls,id.to_owned()){toast(&panel,e)}}update=true;},
                     "pause_all"|"resume_all"=>{let jobs=store.lock().unwrap().jobs().unwrap_or_default();for job in jobs{if v["action"]=="pause_all"{control(&store,&controls,&job.id,false);}else if ["paused","failed"].contains(&job.state.as_str()){let _=enqueue(&store,&tx,&mut controls,job.id);}}update=true;},
                     "open_folder"=>{let path=PathBuf::from(store.lock().unwrap().setting("folder",""));open_folder(&path);},
-                    "open_job"=>{if let Ok((_,p,_))=store.lock().unwrap().payload(id){open_folder(&p);}},
+                    "open_job"=>{if let Ok((_,p,_))=store.lock().unwrap().payload(id){if p.is_dir(){open_folder(&p);}else{toast(&panel,"原目录不存在或暂时无法访问，请检查磁盘或打开笔记补下");}}},
                     "open_note"=>{if let Ok((n,_,_))=store.lock().unwrap().payload(id){if site_allowed(&n.url){let _=browser.load_url(&n.url);}}},
                     "link"=>{let url=v["url"].as_str().unwrap_or("").trim();if site_allowed(url){let _=browser.load_url(url);}else{toast(&panel,"只支持完整的 HTTPS 小红书链接");}},
                     "choose_folder"=>{if let Some(path)=rfd::FileDialog::new().set_title("选择下载文件夹").pick_folder(){let test=path.join(".xhs-write-check");match OpenOptions::new().create_new(true).write(true).open(&test){Ok(f)=>{drop(f);let _=std::fs::remove_file(test);let _=store.lock().unwrap().set_setting("folder",&path.to_string_lossy());toast(&panel,"已保存，新任务使用新目录");},Err(_)=>toast(&panel,"该目录不可写，请更换目录")}}update=true;},
@@ -401,7 +466,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             _=>{}
         }
-        if update{snapshot(&panel,&store,&current,collapsed,started);}
+        if update{snapshot(&panel,&store,&current,collapsed,started,&local);}
     });
 }
 
