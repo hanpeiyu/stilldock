@@ -5,8 +5,9 @@
   // Search behavior belongs to the browser bridge, independent of focus-mode CSS.
   function searchRoute(){
     const url=new URL(location.href);
-    if(!/^\/search_result(?:\/|$)/.test(url.pathname)){lastSearchRoute='';return;}
-    const route=url.pathname+'?'+(url.searchParams.get('keyword')||url.searchParams.get('query')||'');
+    if(/\/(?:explore|discovery\/item|search_result)\/[a-f0-9]{24}(?:\/|$)/i.test(url.pathname)||/^[a-f0-9]{24}$/i.test(url.searchParams.get('noteId')||url.searchParams.get('note_id')||''))return;
+    if(url.pathname.replace(/\/$/,'')!=='/search_result'){lastSearchRoute='';return;}
+    const route='/search_result?'+(url.searchParams.get('keyword')||url.searchParams.get('query')||'');
     if(route!==lastSearchRoute){lastSearchRoute=route;send({kind:'search_start'});}
   }
   function searchIntent(event){
@@ -22,7 +23,8 @@
       const link=target.closest('a[href]');
       const href=link?.getAttribute('href')||'';
       const button=target.closest('button,[role="button"],.search-icon,.search-submit,.search-button,.search-icon-box');
-      if(/(?:^|\/)search_result(?:[/?#]|$)/.test(href)||(root&&button))send({kind:'search_start'});
+      let searchLink=false;try{if(href){const url=new URL(href,location.href);searchLink=url.pathname.replace(/\/$/,'')==='/search_result'&&!/^[a-f0-9]{24}$/i.test(url.searchParams.get('noteId')||url.searchParams.get('note_id')||'');}}catch{}
+      if(searchLink||(root&&button))send({kind:'search_start'});
     }
   }
   document.addEventListener('keydown',searchIntent,true);

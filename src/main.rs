@@ -338,7 +338,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             },
             Event::UserEvent(Message::Open(url))=>{let _=browser.load_url(&url);},
             Event::UserEvent(Message::Navigate(url))=>{
-                if url::Url::parse(&url).is_ok_and(|u|u.path().trim_end_matches('/')=="/search_result"||u.path().starts_with("/search_result/")){collapsed=false;layout(&window,&browser,&panel,collapsed);update=true;}
+                if url::Url::parse(&url).is_ok_and(|u|u.path().trim_end_matches('/')=="/search_result"){collapsed=false;layout(&window,&browser,&panel,collapsed);update=true;}
             }
             Event::UserEvent(Message::Site(raw))=>{
                 if let Ok(value)=serde_json::from_str::<Value>(&raw){match value["kind"].as_str(){

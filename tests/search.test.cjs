@@ -35,3 +35,11 @@ test('typing, unrelated clicks and IME Enter do not expand the panel',()=>{
   p.listeners.keydown({type:'keydown',target,key:'Enter',isComposing:true});
   p.listeners.click({type:'click',target:{closest:()=>null}});assert.equal(p.count(),0);
 });
+
+test('opening and returning from a note does not reopen a manually collapsed sidebar',()=>{
+  const p=boot('/search_result?keyword=room');assert.equal(p.count(),1);
+  p.history.pushState(null,'','/explore/abcdef0123456789abcdef01');p.history.pushState(null,'','/search_result?keyword=room');assert.equal(p.count(),1);
+  p.history.pushState(null,'','/search_result/abcdef0123456789abcdef01?keyword=room');p.history.pushState(null,'','/search_result?keyword=room');assert.equal(p.count(),1);
+  p.listeners.click({type:'click',target:{closest:s=>s==='a[href]'?{getAttribute:()=>'/search_result/abcdef0123456789abcdef01'}:null}});assert.equal(p.count(),1);
+  p.history.pushState(null,'','/search_result?keyword=new');assert.equal(p.count(),2);
+});
