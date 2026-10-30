@@ -10,7 +10,7 @@
 4. Node.js 22+（仅页面测试需要）。
 5. NSIS 3（仅安装包需要）。
 
-不需要 Python、.NET、前端包管理器、外部 Chrome 或 Playwright。`assets/` 中的文件通过 `include_str!` 编译进 exe。
+不需要 Python、.NET、前端包管理器、外部 Chrome 或 Playwright。运行所需的页面资源与图标编译进 exe，`build.rs` 通过 winresource 调用 Windows SDK 的 rc.exe 嵌入图标和版本信息。`assets/brand/` 保留图标源图与多尺寸导出；不需要在使用程序时另外加载源图。
 
 ## 测试与构建
 

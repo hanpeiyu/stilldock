@@ -1,6 +1,6 @@
 [package]
 name = "xhs-browser"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 license = "GPL-3.0-only"
 description = "StillDock: high-resolution Xiaohongshu images and Live media for Windows"
@@ -19,6 +19,9 @@ url = "2"
 rfd = { version = "0.15", default-features = false }
 fs2 = "0.4"
 imagesize = "0.14"
+
+[build-dependencies]
+winresource = "0.1"
 
 [profile.release]
 opt-level = "s"

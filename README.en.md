@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/brand/stilldock-256.png" width="96" height="96" alt="StillDock icon"></p>
+
 # StillDock · 原帧
 
 A Windows tool focused on high-resolution, watermark-free Xiaohongshu material downloads. Search, browse, select images and download in one window, powered by Rust and embedded WebView2.

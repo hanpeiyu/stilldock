@@ -18,7 +18,8 @@ use tao::{
     dpi::LogicalSize,
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoopBuilder},
-    window::{Window, WindowBuilder},
+    platform::windows::WindowBuilderExtWindows,
+    window::{Icon, Window, WindowBuilder},
 };
 use tokio::sync::watch;
 use wry::{
@@ -204,7 +205,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     let event_loop = EventLoopBuilder::<Message>::with_user_event().build();
     let proxy = event_loop.create_proxy();
+    let app_icon = Icon::from_rgba(
+        include_bytes!("../assets/brand/window-icon.rgba").to_vec(),
+        64,
+        64,
+    )?;
     let window = WindowBuilder::new()
+        .with_window_icon(Some(app_icon.clone()))
+        .with_taskbar_icon(Some(app_icon))
         .with_title("StillDock · 原帧")
         .with_inner_size(LogicalSize::new(1380.0, 860.0))
         .with_min_inner_size(LogicalSize::new(900.0, 600.0))
@@ -214,7 +222,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let p2 = proxy.clone();
     let boot_options = json!({"focus":setting(&store,"focus",true)&&!setting(&store,"original",false),"ai":setting(&store,"ai",true)&&!setting(&store,"original",false)});
     let bootstrap = include_str!("../assets/bootstrap.js")
-        .replace("__BOOT_CONFIG__", &boot_options.to_string());
+        .replace("__BOOT_CONFIG__", &boot_options.to_string())
+        .replace(
+            "__BRAND_ICON__",
+            include_str!("../assets/brand/icon-64.data-uri.txt").trim(),
+        );
     let initial = format!(
         "{}\nwindow.__xhsInstallAdapters=()=>{{{}}};\n{}",
         bootstrap,
@@ -259,7 +271,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let p = proxy.clone();
     let p2 = proxy.clone();
     let panel = WebViewBuilder::new_with_web_context(&mut context)
-        .with_html(include_str!("../assets/panel.html"))
+        .with_html(include_str!("../assets/panel.html").replace(
+            "__BRAND_ICON__",
+            include_str!("../assets/brand/icon-64.data-uri.txt").trim(),
+        ))
         .with_autoplay(false)
         .with_background_color((24, 24, 27, 255))
         .with_focused(false)

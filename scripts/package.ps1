@@ -54,6 +54,7 @@ try {
         $zip = [System.IO.Compression.ZipArchive]::new($stream, [System.IO.Compression.ZipArchiveMode]::Create)
         try {
             [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $exe, 'xhs-browser.exe') | Out-Null
+            [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, (Join-Path $repoRoot 'assets\brand\stilldock-256.png'), 'assets/brand/stilldock-256.png') | Out-Null
             foreach ($name in @('README.md', 'LICENSE', 'NOTICE.md')) {
                 [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, (Join-Path $repoRoot $name), $name) | Out-Null
             }

@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="assets/brand/stilldock-256.png" width="96" height="96" alt="StillDock 图标">
+
 # 原帧 StillDock
 
 **小红书高清无水印素材下载工具，专注大图与 Live 动态素材。**

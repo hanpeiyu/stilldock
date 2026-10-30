@@ -1,8 +1,10 @@
 ﻿Unicode True
+!define MUI_ICON "assets\brand\stilldock.ico"
+!define MUI_UNICON "assets\brand\stilldock.ico"
 !include "MUI2.nsh"
 !include "x64.nsh"
 !ifndef APP_VERSION
-  !define APP_VERSION "0.2.1"
+  !define APP_VERSION "0.2.2"
 !endif
 !ifndef APP_EXE
   !define APP_EXE "target\release\xhs-browser.exe"
@@ -41,6 +43,9 @@ Section "安装"
   File "LICENSE"
   File "README.md"
   File "NOTICE.md"
+  SetOutPath "$INSTDIR\assets\brand"
+  File "assets\brand\stilldock-256.png"
+  SetOutPath "$INSTDIR"
   WriteUninstaller "$INSTDIR\uninstall.exe"
   CreateShortcut "$DESKTOP\原帧小红书浏览器.lnk" "$INSTDIR\xhs-browser.exe"
   CreateDirectory "$SMPROGRAMS\原帧小红书浏览器"
@@ -49,7 +54,7 @@ Section "安装"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\XhsBrowserRust" "DisplayName" "原帧 StillDock"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\XhsBrowserRust" "DisplayVersion" "${APP_VERSION}"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\XhsBrowserRust" "UninstallString" '$\"$INSTDIR\uninstall.exe$\"'
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\XhsBrowserRust" "DisplayIcon" "$INSTDIR\xhs-browser.exe"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\XhsBrowserRust" "DisplayIcon" "$INSTDIR\xhs-browser.exe,0"
   SetRegView 32
   ReadRegStr $0 HKLM "Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" "pv"
   StrCmp $0 "" 0 runtime_done
@@ -73,6 +78,9 @@ Section "Uninstall"
   Delete "$INSTDIR\xhs-browser.exe"
   Delete "$INSTDIR\README.md"
   Delete "$INSTDIR\NOTICE.md"
+  Delete "$INSTDIR\assets\brand\stilldock-256.png"
+  RMDir "$INSTDIR\assets\brand"
+  RMDir "$INSTDIR\assets"
   Delete "$INSTDIR\LICENSE"
   Delete "$INSTDIR\uninstall.exe"
   RMDir "$INSTDIR"
