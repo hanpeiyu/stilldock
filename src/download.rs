@@ -1,6 +1,6 @@
 use crate::{
     model::{file_extension, media_allowed, safe_name, Asset, Note},
-    store::Store,
+    store::{DownloadOptions, SavedFile, Store},
 };
 use std::{
     path::PathBuf,
@@ -17,6 +17,7 @@ pub struct Work {
     pub id: String,
     pub note: Note,
     pub folder: PathBuf,
+    pub options: DownloadOptions,
     pub control: watch::Receiver<u8>,
 }
 
@@ -69,7 +70,7 @@ async fn transfer_file(
     url: &str,
     high_quality: bool,
 ) -> Result<Transfer, String> {
-    let part = work.folder.join(format!(
+    let part = work.options.temp_folder.join(format!(
         "{:03}{}.part",
         index + 1,
         if high_quality { "-hq" } else { "" }
@@ -213,25 +214,67 @@ async fn run(
     tokio::fs::create_dir_all(&work.folder)
         .await
         .map_err(|_| "无法创建下载目录，请检查路径与权限")?;
-    let metadata = serde_json::to_vec_pretty(&work.note).map_err(|_| "笔记信息保存失败")?;
-    tokio::fs::write(work.folder.join("note.json"), metadata)
+    tokio::fs::create_dir_all(&work.options.temp_folder)
         .await
-        .map_err(|_| "笔记信息保存失败")?;
-    let report_path = work.folder.join("download-report.json");
-    let mut report: Vec<serde_json::Value> = tokio::fs::read(&report_path)
-        .await
-        .ok()
-        .and_then(|raw| serde_json::from_slice(&raw).ok())
-        .unwrap_or_default();
+        .map_err(|_| "无法创建下载缓存目录")?;
+    if work.options.layout != "legacy" {
+        if let Some(parent) = work.options.temp_folder.parent() {
+            crate::file_ops::hide_cache(parent);
+        }
+    }
+    let mut report = store.lock().unwrap().saved_files(&work.id)?;
     let mut completed = 0;
     for (index, asset) in work.note.assets.clone().iter().enumerate() {
         if *work.control.borrow() != 0 {
             return Err("任务已停止".into());
         }
-        if let Some((path, size)) = store.lock().unwrap().file(&work.id, index) {
+        let saved = { store.lock().unwrap().file(&work.id, index) };
+        if let Some((path, size)) = saved {
             if path.parent() == Some(work.folder.as_path())
                 && std::fs::metadata(&path).is_ok_and(|m| m.len() == size && size > 0)
             {
+                if !report
+                    .iter()
+                    .any(|record| record.index == index && !record.format.is_empty())
+                {
+                    let (width, height) = if asset.video {
+                        (0, 0)
+                    } else {
+                        let dimensions =
+                            imagesize::size(&path).map_err(|_| "已保存图片无法读取，请重新下载")?;
+                        (dimensions.width, dimensions.height)
+                    };
+                    let record = SavedFile {
+                        index,
+                        sequence: if asset.sequence > 0 {
+                            asset.sequence
+                        } else {
+                            index + 1
+                        },
+                        live: asset.live,
+                        video: asset.video,
+                        filename: path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into(),
+                        bytes: size,
+                        width,
+                        height,
+                        format: path
+                            .extension()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into(),
+                        source: "legacy".into(),
+                    };
+                    store
+                        .lock()
+                        .unwrap()
+                        .file_done(&work.id, index, &path, &record)?;
+                    report.retain(|r| r.index != index);
+                    report.push(record);
+                }
                 completed += size;
                 continue;
             }
@@ -272,46 +315,65 @@ async fn run(
         } else {
             index + 1
         };
-        let stem = format!(
-            "{:03}{}_{}",
-            sequence,
-            if asset.live { "_live" } else { "" },
-            safe_name(&work.note.title)
-        );
-        let mut destination = work.folder.join(format!("{stem}.{}", transfer.ext));
-        if destination.exists() {
-            destination = work.folder.join(format!(
-                "{stem}_{}.{}",
-                work.id.rsplit('-').next().unwrap_or("new"),
-                transfer.ext
-            ));
-        }
-        tokio::fs::rename(&transfer.part, &destination)
-            .await
-            .map_err(|_| "保存最终文件失败，请检查文件占用")?;
+        let stem = if work.options.layout == "flat" {
+            format!(
+                "{}_{}_{:03}{}",
+                safe_name(&work.note.title),
+                work.note.id,
+                sequence,
+                if asset.live { "_live" } else { "" }
+            )
+        } else {
+            format!(
+                "{:03}{}_{}",
+                sequence,
+                if asset.live { "_live" } else { "" },
+                safe_name(&work.note.title)
+            )
+        };
+        let destination = crate::file_ops::publish(
+            &transfer.part,
+            &work.folder,
+            &stem,
+            transfer.ext,
+            work.id.rsplit('-').next().unwrap_or("new"),
+        )
+        .map_err(|_| "保存最终文件失败，请检查权限或文件占用")?;
         // After a source succeeds, discard only this item's unused candidate partial.
         let unused_part = if source == "high_resolution" {
-            Some(work.folder.join(format!("{:03}.part", index + 1)))
+            Some(
+                work.options
+                    .temp_folder
+                    .join(format!("{:03}.part", index + 1)),
+            )
         } else {
             None
         };
         if let Some(path) = unused_part {
             let _ = tokio::fs::remove_file(path).await;
         }
-        report.retain(|r| r["index"].as_u64() != Some(index as u64));
-        report.push(serde_json::json!({"index":index,"sequence":sequence,"live":asset.live,"video":asset.video,
-            "filename":destination.file_name().unwrap_or_default().to_string_lossy(),"bytes":transfer.bytes,
-            "width":transfer.width,"height":transfer.height,"format":transfer.ext,"source":source}));
-        tokio::fs::write(
-            &report_path,
-            serde_json::to_vec_pretty(&report).map_err(|_| "下载报告编码失败")?,
-        )
-        .await
-        .map_err(|_| "下载报告保存失败")?;
+        let record = SavedFile {
+            index,
+            sequence,
+            live: asset.live,
+            video: asset.video,
+            filename: destination
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into(),
+            bytes: transfer.bytes,
+            width: transfer.width,
+            height: transfer.height,
+            format: transfer.ext.into(),
+            source: source.into(),
+        };
         store
             .lock()
             .unwrap()
-            .file_done(&work.id, index, &destination, transfer.bytes);
+            .file_done(&work.id, index, &destination, &record)?;
+        report.retain(|r| r.index != index);
+        report.push(record);
         completed += transfer.bytes;
         store.lock().unwrap().state(
             &work.id,
@@ -324,7 +386,19 @@ async fn run(
             .progress(&work.id, completed, completed);
         notify();
     }
-    let live = report.iter().filter(|r| r["live"] == true).count();
+    report.sort_by_key(|record| record.index);
+    let export_failed = if work.options.export_json {
+        export_metadata(work, &report).await.is_err()
+    } else {
+        false
+    };
+    if work.options.layout != "legacy" {
+        let _ = tokio::fs::remove_dir(&work.options.temp_folder).await;
+        if let Some(parent) = work.options.temp_folder.parent() {
+            let _ = tokio::fs::remove_dir(parent).await;
+        }
+    }
+    let live = report.iter().filter(|r| r.live).count();
     let mut summary = format!(
         "完成 {} 项 · {:.1} MB",
         work.note.assets.len(),
@@ -333,10 +407,26 @@ async fn run(
     if live > 0 {
         summary.push_str(&format!(" · {live} 个 LIVE 片段"));
     }
-    if let Some(image) = report.iter().find(|r| r["width"].as_u64().unwrap_or(0) > 0) {
-        summary.push_str(&format!(" · {}×{}", image["width"], image["height"]));
+    if let Some(image) = report.iter().find(|r| r.width > 0) {
+        summary.push_str(&format!(" · {}×{}", image.width, image.height));
+    }
+    if export_failed {
+        summary.push_str(" · JSON 说明导出失败");
     }
     Ok(summary)
+}
+
+async fn export_metadata(work: &Work, report: &[SavedFile]) -> Result<(), String> {
+    let metadata =
+        serde_json::to_vec_pretty(&serde_json::json!({"note":&work.note,"files":report}))
+            .map_err(|_| "说明文件编码失败")?;
+    tokio::fs::write(
+        work.folder.join(format!("{}-metadata.json", work.id)),
+        metadata,
+    )
+    .await
+    .map_err(|_| "说明文件导出失败")?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -365,6 +455,181 @@ mod tests {
         });
         (url, thread)
     }
+    fn tiny_png() -> Vec<u8> {
+        [b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x02\x00\x00\x00\x03\x08\x06\x00\x00\x00".as_slice(),&[0;48]].concat()
+    }
+    #[test]
+    fn flat_output_uses_sqlite_and_exports_only_when_enabled() {
+        let root = std::env::temp_dir().join(format!("stilldock-flat-test-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let folder = root.join("media");
+        std::fs::create_dir_all(&folder).unwrap();
+        let store = Arc::new(Mutex::new(Store::open(&root.join("jobs.db")).unwrap()));
+        store
+            .lock()
+            .unwrap()
+            .set_setting("output_layout", "flat")
+            .unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let client = reqwest::Client::new();
+        let (url, thread) = server(tiny_png(), false);
+        let mut note = Note {
+            id: "abcdef0123456789abcdef01".into(),
+            title: "same".into(),
+            assets: vec![Asset {
+                url,
+                sequence: 2,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let id = store.lock().unwrap().add(&note, &folder).unwrap();
+        let options = store.lock().unwrap().download_options(&id).unwrap();
+        let cache = options.temp_folder.clone();
+        let existing = folder.join(format!("same_{}_002.png", note.id));
+        std::fs::write(&existing, b"do not overwrite").unwrap();
+        let (_tx, rx) = watch::channel(0);
+        let mut work = Work {
+            id: id.clone(),
+            note: note.clone(),
+            folder: folder.clone(),
+            options,
+            control: rx,
+        };
+        runtime
+            .block_on(run(&client, &store, &mut work, &|| {}))
+            .unwrap();
+        thread.join().unwrap();
+        assert_eq!(std::fs::read(&existing).unwrap(), b"do not overwrite");
+        assert!(!cache.exists());
+        assert!(!folder.join(".stilldock-cache").exists());
+        let records = store.lock().unwrap().saved_files(&id).unwrap();
+        assert_eq!(records[0].width, 2);
+        assert_eq!(records[0].height, 3);
+        assert_eq!(records[0].sequence, 2);
+        assert_ne!(
+            records[0].filename,
+            existing.file_name().unwrap().to_string_lossy()
+        );
+        assert!(std::fs::read_dir(&folder).unwrap().all(|entry| entry
+            .unwrap()
+            .path()
+            .extension()
+            .is_none_or(|e| e != "json")));
+        store.lock().unwrap().state(&id, "done", "");
+        store
+            .lock()
+            .unwrap()
+            .set_setting("export_json", "true")
+            .unwrap();
+        let (url, thread) = server(tiny_png(), false);
+        note.id = "abcdef0123456789abcdef02".into();
+        note.assets[0].url = url;
+        let next = store.lock().unwrap().add(&note, &folder).unwrap();
+        let options = store.lock().unwrap().download_options(&next).unwrap();
+        let (_tx, rx) = watch::channel(0);
+        let mut work = Work {
+            id: next.clone(),
+            note,
+            folder: folder.clone(),
+            options,
+            control: rx,
+        };
+        runtime
+            .block_on(run(&client, &store, &mut work, &|| {}))
+            .unwrap();
+        thread.join().unwrap();
+        let json: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(folder.join(format!("{next}-metadata.json"))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(json["files"][0]["width"], 2);
+        assert_eq!(json["note"]["id"], "abcdef0123456789abcdef02");
+        assert!(std::fs::read_dir(&folder)
+            .unwrap()
+            .all(|entry| !entry.unwrap().path().is_dir()));
+        drop(work);
+        drop(store);
+        let _ = std::fs::remove_dir_all(root);
+    }
+    #[test]
+    fn legacy_resume_rebuilds_file_metadata_without_reading_or_overwriting_json() {
+        let root =
+            std::env::temp_dir().join(format!("stilldock-legacy-test-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let database = root.join("jobs.db");
+        let folder = root.join("old-task");
+        std::fs::create_dir_all(&folder).unwrap();
+        let note = Note {
+            id: "abcdef0123456789abcdef01".into(),
+            title: "old".into(),
+            assets: vec![Asset {
+                url: "https://sns-img-bd.xhscdn.com/no-network-needed".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let id;
+        {
+            let store = Store::open(&database).unwrap();
+            id = store.add(&note, &root).unwrap();
+        }
+        let image = folder.join("old.png");
+        let data = tiny_png();
+        std::fs::write(&image, &data).unwrap();
+        std::fs::write(folder.join("note.json"), b"keep old note").unwrap();
+        std::fs::write(folder.join("download-report.json"), b"not even valid JSON").unwrap();
+        {
+            let db = rusqlite::Connection::open(&database).unwrap();
+            db.execute(
+                "UPDATE jobs SET layout='legacy',temp_folder='',folder=? WHERE id=?",
+                rusqlite::params![folder.to_string_lossy(), id],
+            )
+            .unwrap();
+            db.execute(
+                "INSERT INTO files(job_id,idx,path,size) VALUES(?,0,?,?)",
+                rusqlite::params![id, image.to_string_lossy(), data.len() as i64],
+            )
+            .unwrap();
+        }
+        let store = Arc::new(Mutex::new(Store::open(&database).unwrap()));
+        let options = store.lock().unwrap().download_options(&id).unwrap();
+        let (_tx, rx) = watch::channel(0);
+        let mut work = Work {
+            id: id.clone(),
+            note,
+            folder: folder.clone(),
+            options,
+            control: rx,
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime
+            .block_on(run(&reqwest::Client::new(), &store, &mut work, &|| {}))
+            .unwrap();
+        let records = store.lock().unwrap().saved_files(&id).unwrap();
+        assert_eq!(records[0].width, 2);
+        assert_eq!(records[0].height, 3);
+        assert_eq!(records[0].source, "legacy");
+        assert_eq!(
+            std::fs::read(folder.join("note.json")).unwrap(),
+            b"keep old note"
+        );
+        assert_eq!(
+            std::fs::read(folder.join("download-report.json")).unwrap(),
+            b"not even valid JSON"
+        );
+        assert_eq!(std::fs::read(image).unwrap(), data);
+        drop(work);
+        drop(store);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn smaller_hd_is_rejected_and_live_pairs_share_sequence() {
         let root =
@@ -414,6 +679,7 @@ mod tests {
             id: id.clone(),
             note,
             folder: folder.clone(),
+            options: store.lock().unwrap().download_options(&id).unwrap(),
             control: rx,
         };
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -436,12 +702,12 @@ mod tests {
         assert!(summary.contains("1 个 LIVE"));
         assert!(folder.join("002_pair.png").is_file());
         assert!(folder.join("002_live_pair.mp4").is_file());
-        let report: Vec<serde_json::Value> =
-            serde_json::from_slice(&std::fs::read(folder.join("download-report.json")).unwrap())
-                .unwrap();
-        assert_eq!(report[0]["source"], "high_resolution");
-        assert_eq!(report[0]["width"], 2);
-        assert_eq!(report[0]["height"], 3);
+        let report = store.lock().unwrap().saved_files(&id).unwrap();
+        assert_eq!(report[0].source, "high_resolution");
+        assert_eq!(report[0].width, 2);
+        assert_eq!(report[0].height, 3);
+        assert!(!folder.join("note.json").exists());
+        assert!(!folder.join("download-report.json").exists());
         drop(work);
         drop(store);
         let _ = std::fs::remove_dir_all(root);
@@ -472,6 +738,7 @@ mod tests {
             id: id.clone(),
             note,
             folder: folder.clone(),
+            options: store.lock().unwrap().download_options(&id).unwrap(),
             control: rx,
         };
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -487,7 +754,10 @@ mod tests {
             assert!(run(&client, &store, &mut work, &|| {}).await.is_err());
         });
         thread.join().unwrap();
-        assert_eq!(std::fs::read(folder.join("001.part")).unwrap(), data[..8]);
+        assert_eq!(
+            std::fs::read(work.options.temp_folder.join("001.part")).unwrap(),
+            data[..8]
+        );
         let (url, thread) = server(data.clone(), false);
         work.note.assets[0].url = url;
         let (_tx, rx) = watch::channel(0);

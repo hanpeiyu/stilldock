@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod download;
+mod file_ops;
 mod model;
 mod store;
 
@@ -90,7 +91,7 @@ fn snapshot(panel: &WebView, store: &SharedStore, note: &Note, collapsed: bool, 
     send(
         panel,
         json!({"kind":"snapshot","jobs":db.jobs().unwrap_or_default(),"note":note,"collapsed":collapsed,
-        "folder":db.setting("folder",""),"focus":db.setting("focus","true")=="true","ai":db.setting("ai","true")=="true",
+        "output_layout":db.setting("output_layout","note"),"export_json":db.setting("export_json","false")=="true","folder":db.setting("folder",""),"focus":db.setting("focus","true")=="true","ai":db.setting("ai","true")=="true",
         "gestures":db.setting("gestures","true")=="true","include_live":db.setting("include_live","false")=="true","comments":db.setting("comments","true")=="true","original":db.setting("original","false")=="true",
         "about":format!("Windows 10/11 · WebView2 · v{} · 本次运行 {:.0} 秒",env!("CARGO_PKG_VERSION"),started.elapsed().as_secs_f64())}),
     );
@@ -107,6 +108,7 @@ fn enqueue(
     id: String,
 ) -> Result<(), String> {
     let (note, folder, state) = store.lock().unwrap().payload(&id)?;
+    let options = store.lock().unwrap().download_options(&id)?;
     if controls
         .get(&id)
         .is_some_and(|signal| *signal.borrow() == 0)
@@ -127,6 +129,7 @@ fn enqueue(
         id: id.clone(),
         note,
         folder,
+        options,
         control: receiver,
     })
     .map_err(|_| {
@@ -390,7 +393,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     "open_note"=>{if let Ok((n,_,_))=store.lock().unwrap().payload(id){if site_allowed(&n.url){let _=browser.load_url(&n.url);}}},
                     "link"=>{let url=v["url"].as_str().unwrap_or("").trim();if site_allowed(url){let _=browser.load_url(url);}else{toast(&panel,"只支持完整的 HTTPS 小红书链接");}},
                     "choose_folder"=>{if let Some(path)=rfd::FileDialog::new().set_title("选择下载文件夹").pick_folder(){let test=path.join(".xhs-write-check");match OpenOptions::new().create_new(true).write(true).open(&test){Ok(f)=>{drop(f);let _=std::fs::remove_file(test);let _=store.lock().unwrap().set_setting("folder",&path.to_string_lossy());toast(&panel,"已保存，新任务使用新目录");},Err(_)=>toast(&panel,"该目录不可写，请更换目录")}}update=true;},
-                    "setting"=>{if let Some(key)=v["key"].as_str(){if key=="gestures"{let enabled=v["value"].as_bool().unwrap_or(true);let _=store.lock().unwrap().set_setting(key,if enabled{"true"}else{"false"});let _=browser.evaluate_script(&format!("window.__stillDockGestures?.setEnabled({enabled});"));}else if key=="include_live"{let _=store.lock().unwrap().set_setting(key,if v["value"].as_bool().unwrap_or(false){"true"}else{"false"});}else if ["focus","ai","comments","original"].contains(&key){let _=store.lock().unwrap().set_setting(key,if v["value"].as_bool().unwrap_or(false){"true"}else{"false"});let _=browser.evaluate_script(&adapters(&store));let initial=format!("window.__xhsInstallAdapters=()=>{{{}}}",adapters(&store));let _=browser.evaluate_script(&initial);toast(&panel,"已更新浏览模式");}}update=true;},
+                    "setting"=>{if let Some(key)=v["key"].as_str(){if key=="output_layout"{if let Some(layout)=v["value"].as_str(){if ["note","flat"].contains(&layout){let _=store.lock().unwrap().set_setting(key,layout);}}}else if key=="export_json"{let _=store.lock().unwrap().set_setting(key,if v["value"].as_bool().unwrap_or(false){"true"}else{"false"});}else if key=="gestures"{let enabled=v["value"].as_bool().unwrap_or(true);let _=store.lock().unwrap().set_setting(key,if enabled{"true"}else{"false"});let _=browser.evaluate_script(&format!("window.__stillDockGestures?.setEnabled({enabled});"));}else if key=="include_live"{let _=store.lock().unwrap().set_setting(key,if v["value"].as_bool().unwrap_or(false){"true"}else{"false"});}else if ["focus","ai","comments","original"].contains(&key){let _=store.lock().unwrap().set_setting(key,if v["value"].as_bool().unwrap_or(false){"true"}else{"false"});let _=browser.evaluate_script(&adapters(&store));let initial=format!("window.__xhsInstallAdapters=()=>{{{}}}",adapters(&store));let _=browser.evaluate_script(&initial);toast(&panel,"已更新浏览模式");}}update=true;},
                     "pause_exit"=>{pause_exit=true;let jobs=store.lock().unwrap().jobs().unwrap_or_default();for job in jobs{control(&store,&controls,&job.id,false);}if !store.lock().unwrap().busy(){*flow=ControlFlow::Exit;}update=true;},
                     "finish_exit"=>{finish_exit=true;toast(&panel,"队列处理结束后退出");if !store.lock().unwrap().busy(){*flow=ControlFlow::Exit;}},
                     "stay"=>{finish_exit=false;},_=>{}

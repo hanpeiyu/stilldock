@@ -17,7 +17,7 @@ A Windows tool focused on high-resolution, watermark-free Xiaohongshu material d
 
 ## High-resolution images and Live media
 
-The downloader first tries a high-resolution JPEG candidate exposed/derived from the opened note's platform media URL, checks the saved dimensions, and reports failure instead of silently replacing a failed high-resolution source with a low-resolution preview. `download-report.json` records actual dimensions, format, size and source. Files are not re-encoded locally. Available sources may not be the original camera file, and embedded author watermarks are not removed.
+The downloader first tries a high-resolution JPEG candidate exposed/derived from the opened note's platform media URL, checks the saved dimensions, and reports failure instead of silently replacing a failed high-resolution source with a low-resolution preview. SQLite stores actual dimensions, format, size and source. JSON is off by default; optional export creates one `<job-id>-metadata.json` with both note and file information. Files are not re-encoded locally. Available sources may not be the original camera file, and embedded author watermarks are not removed.
 
 Live images are identified in the selection grid. Still images are saved by default; an always-visible checkbox above the download button remembers its setting and also saves the corresponding MP4 using the same original image number. This is an image/video pair, not a guaranteed importable iPhone Live Photo package. An in-page Back to Search button and Escape key close the note, preferring native close to preserve the list and scroll position. Note information is collapsed by default to leave room for the image, with an on-demand information button.
 
@@ -35,7 +35,7 @@ Hold the right button and draw, then release: left returns to search, down downl
 
 ## Local data
 
-Profiles, settings and SQLite tasks use `%LOCALAPPDATA%\XhsBrowserRust`. Downloads default to `%USERPROFILE%\Downloads\XHS\<note-id>\<job-id>`. These names are retained for compatibility with earlier Rust previews. Portable means installation-free, not self-contained profile storage. Uninstalling preserves user data.
+Profiles, settings and SQLite tasks use `%LOCALAPPDATA%\XhsBrowserRust`. Downloads default to `%USERPROFILE%\Downloads\XHS\<note-id>` (or directly in the chosen directory). These names are retained for compatibility with earlier Rust previews. Portable means installation-free, not self-contained profile storage. Uninstalling preserves user data.
 
 No application telemetry or local HTTP server is configured. Cookies are not exported to the task database. Stored note metadata and media URLs may contain access parameters; do not attach your data directory to public issues.
 
@@ -59,3 +59,9 @@ Windows x64 only. No API/MCP/TUI, author scraping or automatic updater. Media is
 ## Attribution and license
 
 GPL-3.0-only; see [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md). Extracted from the Rust browser experiment in [hanpeiyu/XHS-Downloader](https://github.com/hanpeiyu/XHS-Downloader), with extraction and page-adaptation work based on [JoeanAmier/XHS-Downloader](https://github.com/JoeanAmier/XHS-Downloader) and its derivative workspace. This project is not affiliated with Xiaohongshu.
+
+## Save layout and optional metadata export
+
+Settings offers per-note subfolders or flat output. Per-note output has no extra job folder; flat filenames include the title, note ID and image sequence. Final files are published without overwriting existing names. Pause/resume caches remain isolated per job in a hidden `.stilldock-cache` and empty cache directories are removed after completion.
+
+Save location, layout and JSON preference are frozen when a job is created. Existing jobs retain their paths and partial files. Old JSON files are not deleted or required for resume; legacy file dimensions can be rebuilt into SQLite. A combined metadata JSON is exported only when explicitly enabled.

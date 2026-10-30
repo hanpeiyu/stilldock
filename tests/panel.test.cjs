@@ -56,3 +56,9 @@ test('LIVE control stays visible before opening a note and saves its preference'
   const toggle=p.elements.get('include-live');toggle.checked=true;toggle.onchange();assert.deepEqual(p.sent.at(-1),{action:'setting',key:'include_live',value:true});
   p.snapshot({id:'abcdef0123456789abcdef01',assets:[]});assert.equal(toggle.checked,true);assert.equal(p.elements.get('quality').textContent,'');
 });
+
+test('save layout and optional JSON controls send typed settings and show defaults',()=>{
+  const p=panel();p.snapshot({});assert.equal(p.elements.get('output_layout').value,'note');assert.equal(p.elements.get('export_json').checked,false);
+  const layout=p.elements.get('output_layout');layout.value='flat';layout.onchange();assert.deepEqual(p.sent.at(-1),{action:'setting',key:'output_layout',value:'flat'});
+  const json=p.elements.get('export_json');json.checked=true;json.onchange();assert.deepEqual(p.sent.at(-1),{action:'setting',key:'export_json',value:true});
+});
