@@ -1,0 +1,16 @@
+name: 功能建议
+description: 提出素材搜索、浏览与下载相关的建议
+title: "[Feature] "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你遇到什么问题
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: 期望如何改善
+    validations:
+      required: true

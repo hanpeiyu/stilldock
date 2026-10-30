@@ -1,0 +1,35 @@
+name: Build packages
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-x64:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - name: Format
+        run: cargo fmt --check
+      - name: Rust tests
+        run: cargo test --locked
+      - name: Page tests
+        run: node --test tests/site.test.cjs tests/panel.test.cjs tests/search.test.cjs tests/bootstrap.test.cjs
+      - name: Install NSIS
+        run: choco install nsis --no-progress -y
+      - name: Build and package
+        shell: pwsh
+        run: ./scripts/package.ps1
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: shiguang-windows-x64
+          path: |
+            dist/Shiguang-*-windows-x64-portable.zip
+            dist/Shiguang-*-windows-x64-setup.exe
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
