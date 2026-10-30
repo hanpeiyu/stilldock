@@ -49,17 +49,30 @@
     const source=new URL(location.href);
     if(id&&!pathId)source.pathname='/explore/'+id;
     const result={id,title:note?.title||text('#detail-title')||document.title,author:note?.user?.nickname||text('.author .username'),url:source.href,cover:'',assets:[]};
-    const https=u=>{if(typeof u!=='string')return '';try{const value=new URL(u.replace(/^http:/,'https:'),location.href);return value.protocol==='https:'&&/(^|\.)(xhscdn|xiaohongshu)\.com$/.test(value.hostname)?value.href:'';}catch{return '';}};
+    const https=u=>{if(typeof u!=='string'||! /^(?:https?:)?\/\//i.test(u))return '';try{const value=new URL(u.replace(/^http:/,'https:'),location.href);return value.protocol==='https:'&&/(^|\.)(xhscdn|xiaohongshu)\.com$/.test(value.hostname)?value.href:'';}catch{return '';}};
+    function bestStream(stream){
+      const entries=Object.values(unwrap(stream)||{}).flat().filter(v=>v&&typeof v==='object');
+      entries.sort((a,b)=>(Number(b.width||0)*Number(b.height||0)-Number(a.width||0)*Number(a.height||0))||(Number(b.avgBitrate||b.videoBitrate||0)-Number(a.avgBitrate||a.videoBitrate||0)));
+      for(const entry of entries){for(const value of [entry.masterUrl,...(Array.isArray(entry.backupUrls)?entry.backupUrls:[])]){const url=https(value);if(url)return url;}}
+      return '';
+    }
+    function originalImage(image,web){
+      const supplied=https(image.urlOriginal||image.originalUrl);if(supplied)return supplied;
+      if(!web)return '';
+      const parsed=new URL(web),parts=parsed.pathname.split('/').filter(Boolean);
+      let token='';
+      if(/^sns-webpic-[a-z0-9-]+\.xhscdn\.com$/.test(parsed.hostname)&&parts.length>=3)token=parts.slice(2).join('/').split('!')[0];
+      else if(/^sns-img-[a-z0-9-]+\.xhscdn\.com$/.test(parsed.hostname)&&parsed.pathname.includes('!'))token=parts.join('/').split('!')[0];
+      return token&&/^[a-z0-9_/-]+$/i.test(token)?'https://ci.xiaohongshu.com/'+token+'?imageView2/format/jpeg':'';
+    }
     if(note){
       if(note.type==='video'){
-        let streams=Object.values(note.video?.media?.stream||{}).flat().filter(v=>v.masterUrl||v.backupUrls?.length);
-        streams.sort((a,b)=>(b.height||0)-(a.height||0));
-        let video=https(streams[0]?.masterUrl||streams[0]?.backupUrls?.[0]);
+        let video=bestStream(note.video?.media?.stream);
         if(!video&&note.video?.consumer?.originVideoKey)video='https://sns-video-bd.xhscdn.com/'+note.video.consumer.originVideoKey;
         if(video)result.assets.push({url:video,video:true});
       } else for(const image of note.imageList||[]){
         const url=https(image.urlDefault||image.url||image.infoList?.find(i=>i.imageScene==='WB_DFT')?.url||image.urlPre);
-        if(url)result.assets.push({url,video:false,preview:https(image.urlPre)||url});
+        if(url)result.assets.push({url,video:false,preview:https(image.urlPre)||url,original_url:originalImage(image,url),live_url:bestStream(image.stream||image.livePhoto?.stream),width:Number(image.width)||0,height:Number(image.height)||0});
       }
       result.cover=https(note.imageList?.[0]?.urlPre||note.imageList?.[0]?.urlDefault);
     }

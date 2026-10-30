@@ -17,7 +17,7 @@
 ```powershell
 cargo fmt --check
 cargo test --locked
-node --test tests/site.test.cjs tests/panel.test.cjs tests/search.test.cjs tests/bootstrap.test.cjs
+node --test tests/site.test.cjs tests/panel.test.cjs tests/search.test.cjs tests/bootstrap.test.cjs tests/focus.test.cjs
 cargo build --release --locked
 .\target\release\xhs-browser.exe
 ```
@@ -32,8 +32,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package.ps1
 
 脚本会执行 release 构建，寻找 NSIS，下载并验证微软 WebView2 安装引导程序的数字签名，然后生成：
 
-- `dist/Shiguang-<版本>-windows-x64-portable.zip`
-- `dist/Shiguang-<版本>-windows-x64-setup.exe`
+- `dist/StillDock-<版本>-windows-x64-portable.zip`
+- `dist/StillDock-<版本>-windows-x64-setup.exe`
 - `dist/SHA256SUMS.txt`
 
 可指定已有工具与引导程序：

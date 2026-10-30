@@ -1,12 +1,12 @@
 <div align="center">
 
-# 拾光 Shiguang
+# 原帧 StillDock
 
-**专注搜索，挑选图片，把灵感留在本地。**
+**小红书高清无水印素材下载工具，专注大图与 Live 动态素材。**
 
-一个为 Windows 打造的小红书素材浏览器：Rust 驱动，内嵌 WebView2，在同一个窗口里完成搜索、浏览、选图与下载。
+为 Windows 打造，使用 Rust 与内嵌 WebView2，在同一个窗口完成搜索、大图浏览、图集挑选与下载。
 
-[下载预览版](https://github.com/hanpeiyu/shiguang/releases) · [English](README.en.md) · [构建与打包](docs/BUILDING.md) · [问题反馈](https://github.com/hanpeiyu/shiguang/issues)
+[下载预览版](https://github.com/hanpeiyu/stilldock/releases) · [English](README.en.md) · [构建与打包](docs/BUILDING.md) · [问题反馈](https://github.com/hanpeiyu/stilldock/issues)
 
 </div>
 
@@ -19,12 +19,22 @@
 - **可靠队列**：图片和视频下载、暂停/继续/取消、退出恢复、本地历史及按笔记打开目录。
 - **轻量分发**：HTML/CSS/JS 编译进 exe；运行不需要 Python、Node.js、.NET 或外部 Chrome。
 
-这是独立的 Rust 项目，只服务于 Windows 本地素材浏览，不包含原项目的 API、MCP、TUI 或批量作者采集端。
+原名“拾光 Shiguang”，自 v0.2.0 更名为 **StillDock · 原帧**。这是独立的 Rust 项目，只服务于 Windows 本地素材浏览，不包含原项目的 API、MCP、TUI 或批量作者采集端。
+
+## 高清与 Live：实际如何保存
+
+- **优先高清源**：从已打开笔记的媒体地址读取可用的高清候选，优先平台提供的高清 JPEG，读取保存文件的实际分辨率；不在本地二次编码。
+- **明确回退**：候选不可访问、内容无效或分辨率低于笔记标注时，回退网页图片，并在任务结果中显示；没有候选的图片标为“未验证高清源”。
+- **下载报告**：每个任务的 `download-report.json` 记录实际像素尺寸、文件格式、字节数、资源来源和回退原因。
+- **Live 成组保存**：默认保存静态图片；勾选“同时保存 LIVE 动态片段”后，以相同原图编号保存图片和 MP4。缩略图带 LIVE 标记，选图会同时选中对应的一组资源。
+- **大图优先**：原网页笔记信息区默认折叠，点“笔记信息”临时展开；打开笔记后侧栏回到当前笔记下载页。
+
+“高清无水印”是下载目标，不能保证每篇笔记都暴露原始最高画质或无水印资源。平台返回的图片若已含作者嵌入水印，本程序不做抹除或修图。JPEG 资源也不等同于相机原始无损文件。Live 当前保存为图片＋MP4，不保证可直接回导为 iPhone Live Photo。
 
 ## 快速开始
 
-1. 到 [Releases](https://github.com/hanpeiyu/shiguang/releases) 下载 Windows x64 预览版。
-2. 安装包 `Shiguang-<版本>-windows-x64-setup.exe` 按当前用户安装；便携包解压后运行 `xhs-browser.exe`。
+1. 到 [Releases](https://github.com/hanpeiyu/stilldock/releases) 下载 Windows x64 预览版。
+2. 安装包 `StillDock-<版本>-windows-x64-setup.exe` 按当前用户安装；便携包解压后运行 `xhs-browser.exe`。
 3. 首次打开，在应用内完成小红书登录。搜索后打开笔记，在右侧保存整篇或勾选部分图片。
 
 **环境**：64 位 Windows 10/11，以及 [Microsoft Edge WebView2 Evergreen Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)。已安装时复用；安装包在缺少 Runtime 时联网补装。便携版需要自行准备 Runtime。应用需要联网访问小红书。
@@ -38,7 +48,7 @@
 | 登录会话、设置与任务库 | `%LOCALAPPDATA%\XhsBrowserRust` |
 | 下载文件 | `%USERPROFILE%\Downloads\XHS\<笔记ID>\<任务ID>\` |
 | 本地任务数据库 | 数据目录下 `library.sqlite3` |
-| 笔记信息 | 每个任务目录中的 `note.json` |
+| 笔记信息 | 每个任务目录中的 `note.json` 与 `download-report.json` |
 | 卸载 | 保留登录数据和已下载文件 |
 
 沿用此前 Rust 预览版的数据目录及可执行文件名，方便已有用户直接升级。便携版仅指无需安装，登录数据仍写入上述本机目录。
@@ -51,7 +61,7 @@
 
 - 网站结构变化可能影响搜索精简和媒体解析，可先切换“显示原网页”排查。
 - 仅保存当前账号有权查看的笔记；不会绕过登录、验证码或平台访问限制。
-- 图片使用网页提供的地址，不承诺全部为原始最高画质；视频保存网页当前可用流。
+- 高清候选经尺寸校验后保存，失败时明确回退；不承诺全部为原始最高画质或无水印。视频保存网页当前可用流。
 - 历史界面保留所有进行中的任务，并展示最近 200 条已完成/取消记录；不是全库搜索。
 - 已过期媒体链接可能需要重新打开笔记后创建下载任务。
 - 仅 Windows x64；不包含 macOS、Linux、移动端和自动更新。
@@ -61,15 +71,15 @@
 需要 Rust stable MSVC、Visual Studio C++ Build Tools、Windows SDK；页面单元测试还需要 Node.js 22 或更新版本。Node.js 仅用于开发。
 
 ```powershell
-git clone https://github.com/hanpeiyu/shiguang.git
-cd shiguang
+git clone https://github.com/hanpeiyu/stilldock.git
+cd stilldock
 cargo fmt --check
 cargo test --locked
-node --test tests/site.test.cjs tests/panel.test.cjs tests/search.test.cjs tests/bootstrap.test.cjs
+node --test tests/site.test.cjs tests/panel.test.cjs tests/search.test.cjs tests/bootstrap.test.cjs tests/focus.test.cjs
 cargo build --release --locked
 ```
 
-入口为 `src/main.rs`。详见 [构建与打包](docs/BUILDING.md)、[架构说明](docs/ARCHITECTURE.md)、[更新记录](CHANGELOG.md) 和 [后续计划](docs/ROADMAP.md)。GitHub Actions 在 Windows 上运行格式检查、Rust/页面测试及发布构建；手动构建可下载安装包和便携包工件。
+入口为 `src/main.rs`。详见 [构建与打包](docs/BUILDING.md)、[架构说明](docs/ARCHITECTURE.md)、[更新记录](CHANGELOG.md) 和 [后续计划](docs/ROADMAP.md)、[验证记录](docs/VALIDATION.md)。GitHub Actions 在 Windows 上运行格式检查、Rust/页面测试及发布构建；手动构建可下载安装包和便携包工件。
 
 ## 来源与许可
 

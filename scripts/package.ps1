@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [switch]$SkipBuild,
     [string]$NsisPath,
@@ -46,7 +46,7 @@ try {
     }
     $dist = Join-Path $repoRoot 'dist'
     New-Item -ItemType Directory -Path $dist -Force | Out-Null
-    $portable = Join-Path $dist "Shiguang-$version-windows-x64-portable.zip"
+    $portable = Join-Path $dist "StillDock-$version-windows-x64-portable.zip"
     Add-Type -AssemblyName System.IO.Compression
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $stream = [System.IO.File]::Open($portable, [System.IO.FileMode]::Create)
@@ -63,7 +63,7 @@ try {
     finally { $stream.Dispose() }
     & $NsisPath /V2 "/DAPP_VERSION=$version" "/DAPP_EXE=$exe" "/DWEBVIEW2_SETUP=$WebView2Setup" (Join-Path $repoRoot 'installer.nsi')
     if ($LASTEXITCODE -ne 0) { throw 'NSIS packaging failed.' }
-    $installer = Join-Path $dist "Shiguang-$version-windows-x64-setup.exe"
+    $installer = Join-Path $dist "StillDock-$version-windows-x64-setup.exe"
     if (-not (Test-Path -LiteralPath $installer)) { throw 'Installer output was not created.' }
     $checksums = foreach ($artifact in @($portable, $installer)) {
         $hash = (Get-FileHash -LiteralPath $artifact -Algorithm SHA256).Hash.ToLowerInvariant()

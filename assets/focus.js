@@ -4,7 +4,7 @@
   if (!/(^|\.)xiaohongshu\.com$/.test(location.hostname)) return;
   if (window.__xhsFocusMode) { window.__xhsFocusMode.update(config); return; }
   let options = config, timer;
-  const marked = new Set(), comments = new Map(), homeFeeds = new Set();
+  const marked = new Set(), comments = new Map(), homeFeeds = new Set(), materialNotes = new Map();
   let nativeSearch, focusedInput, localLogo, suppressSearch=false;
   const background=getComputedStyle(document.body).backgroundColor;
   document.documentElement.style.setProperty('--xhs-focus-background',background&&background!=='rgba(0, 0, 0, 0)'?background:'#18181b');
@@ -36,9 +36,42 @@
       margin:0 auto !important;width:min(800px,calc(100vw - 120px)) !important;
     }
     .xhs-local-downloaded-badge {position:absolute;left:9px;top:9px;z-index:5;border-radius:5px;background:#304d3ee8;color:white;padding:3px 7px;font:11px/1.5 sans-serif;pointer-events:none}
+    html[data-xhs-focus] [data-xhs-material-note]{width:calc(100vw - 64px)!important;max-width:none!important;height:calc(100vh - 64px)!important;max-height:none!important}
+    html[data-xhs-focus] [data-xhs-note-info]{display:none!important}
+    html[data-xhs-focus] [data-xhs-note-media]{flex:1 1 auto!important;width:100%!important;max-width:none!important;min-width:0!important;height:100%!important;background:#111}
+    html[data-xhs-focus] [data-xhs-note-media] .swiper,html[data-xhs-focus] [data-xhs-note-media] .swiper-wrapper,html[data-xhs-focus] [data-xhs-note-media] .swiper-slide{height:100%!important}
+    html[data-xhs-focus] [data-xhs-note-media] img{object-fit:contain!important;max-height:calc(100vh - 80px)!important}
+    html[data-xhs-focus] [data-xhs-info-open] [data-xhs-note-info]{display:flex!important;flex:0 0 min(340px,38vw)!important;width:min(340px,38vw)!important}
+    .xhs-material-toolbar{position:absolute;left:16px;right:16px;top:12px;z-index:30;display:flex;align-items:flex-start;gap:12px;pointer-events:none}
+    .xhs-material-caption{max-width:70%;padding:7px 10px;border-radius:7px;background:#18181bd9;color:#eee;font:12px/1.6 sans-serif;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .xhs-material-toolbar button{margin-left:auto;flex-shrink:0;pointer-events:auto;border:1px solid #6668;border-radius:7px;background:#18181be8;color:#eee;font:12px/1.5 sans-serif;padding:7px 10px;cursor:pointer}
   `;
   (document.head || document.documentElement).append(style);
+  function resetMaterial(node,record){node.removeAttribute('data-xhs-material-note');node.removeAttribute('data-xhs-info-open');record.media.removeAttribute('data-xhs-note-media');record.info.removeAttribute('data-xhs-note-info');record.bar.remove();}
+  function scanMaterial(){
+    for(const [node,record] of materialNotes)if(!node.isConnected){resetMaterial(node,record);materialNotes.delete(node);}
+    for(const node of document.querySelectorAll('#noteContainer,.note-container')){
+      if(node.parentElement?.closest('[data-xhs-material-note]'))continue;
+      const media=node.querySelector('.media-container'),info=node.querySelector('.interaction-container');
+      if(!media||!info)continue;
+      let record=materialNotes.get(node);
+      if(record&&(record.media!==media||record.info!==info)){resetMaterial(node,record);materialNotes.delete(node);record=null;}
+      if(!record){
+        const bar=document.createElement('div'),caption=document.createElement('span'),button=document.createElement('button');
+        bar.className='xhs-material-toolbar';caption.className='xhs-material-caption';button.textContent='笔记信息';button.setAttribute('aria-expanded','false');
+        button.onclick=()=>{const open=node.toggleAttribute('data-xhs-info-open');button.textContent=open?'收起信息':'笔记信息';button.setAttribute('aria-expanded',String(open));};
+        bar.append(caption,button);node.append(bar);node.setAttribute('data-xhs-material-note','');media.setAttribute('data-xhs-note-media','');info.setAttribute('data-xhs-note-info','');
+        record={media,info,bar,caption,button,id:''};materialNotes.set(node,record);
+        setTimeout(()=>window.dispatchEvent?.(new Event('resize')),0);
+      }
+      const note=window.__xhsReadNote?.()||{};
+      if(note.id!==record.id){record.id=note.id;node.removeAttribute('data-xhs-info-open');record.button.textContent='笔记信息';record.button.setAttribute('aria-expanded','false');}
+      const title=(note.title||node.querySelector('#detail-title')?.textContent||'图片预览')+(note.author?' · '+note.author:'');
+      if(record.caption.textContent!==title)record.caption.textContent=title;
+    }
+  }
   function restore() {
+    for(const [node,record] of materialNotes)resetMaterial(node,record);materialNotes.clear();
     for (const node of marked) node.removeAttribute('data-xhs-focus-hidden');
     marked.clear();
     localLogo?.remove();localLogo=null;
@@ -52,6 +85,7 @@
   }
   function scan() {
     if (!options.enabled) return;
+    scanMaterial();
     if(!localLogo?.isConnected){
       const original=document.querySelector('.side-bar .logo svg,svg.logo,.logo-wrapper svg,.side-bar .logo img,.logo svg');
       localLogo=document.createElement('a');localLogo.className='xhs-local-logo';localLogo.href='/explore';localLogo.setAttribute('aria-label','小红书首页');

@@ -4,9 +4,10 @@ const vm=require('node:vm');
 const fs=require('node:fs');
 const script=fs.readFileSync(require('node:path').join(__dirname,'../assets/site.js'),'utf8');
 const id='abcdef0123456789abcdef01';
-function read(path,{modal=false,stateId=id,mapKey=id,wrapped=false}={}){
+function read(path,{modal=false,stateId=id,mapKey=id,wrapped=false,images}={}){
   const location=new URL('https://www.xiaohongshu.com'+path);
   const window={ipc:{postMessage(){}},__INITIAL_STATE__:{note:{currentNoteId:{value:stateId},noteDetailMap:{[mapKey]:{note:{title:'测试图集',imageList:[{urlDefault:'http://sns-img-bd.xhscdn.com/image'}]}}}}}};
+  if(images)window.__INITIAL_STATE__.note.noteDetailMap[mapKey].note.imageList=images;
   if(wrapped){const note=window.__INITIAL_STATE__.note;note.noteDetailMap={value:note.noteDetailMap};window.__INITIAL_STATE__.note={value:note};}
   window.top=window;window.window=window;
   const document={readyState:'loading',title:'小红书',querySelector:s=>modal&&s.includes('#noteContainer')?{}:null,addEventListener(){}};
@@ -36,4 +37,13 @@ test('reads query note IDs only while a note modal is open',()=>{
   const path='/search_result?noteId='+id;
   assert.equal(read(path,{modal:true,stateId:''}).id,id);
   assert.equal(read(path,{stateId:''}).id,'');
+});
+
+test('extracts a full image candidate separately from the preview and chooses the best LIVE stream',()=>{
+  const note=read('/explore/'+id,{images:[{urlDefault:'https://sns-webpic-qc.xhscdn.com/date/sign/1040abc!nd_dft_wlteh_webp_3',urlPre:'https://sns-img-bd.xhscdn.com/preview',width:4032,height:3024,stream:{h264:[{width:720,height:1280,masterUrl:'https://sns-video-bd.xhscdn.com/low'},{width:1080,height:1920,masterUrl:'http://sns-video-bd.xhscdn.com/high'}]}}]});
+  const asset=note.assets[0];assert.equal(asset.original_url,'https://ci.xiaohongshu.com/1040abc?imageView2/format/jpeg');assert.equal(asset.preview,'https://sns-img-bd.xhscdn.com/preview');assert.equal(asset.live_url,'https://sns-video-bd.xhscdn.com/high');assert.equal(asset.width,4032);
+});
+test('unknown image hosts are never rewritten and untrusted LIVE URLs are rejected',()=>{
+  const note=read('/explore/'+id,{images:[{urlDefault:'https://unknown.xhscdn.com/a!b',stream:{h264:[{masterUrl:'https://evil.example/video'}]}}]});
+  assert.equal(note.assets[0].original_url,'');assert.equal(note.assets[0].live_url,'');
 });

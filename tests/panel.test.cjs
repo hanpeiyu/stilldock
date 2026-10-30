@@ -14,7 +14,7 @@ function panel(){
   const window={ipc:{postMessage:raw=>sent.push(JSON.parse(raw))}};
   vm.runInNewContext(html.match(/<script>([\s\S]*?)<\/script>/)[1],{window,document,setTimeout:()=>1,clearTimeout(){}});
   const snapshot=note=>window.receive({kind:'snapshot',jobs:[],note,collapsed:false,folder:'D:/Downloads',focus:true,ai:true,comments:true,original:false,about:'test'});
-  return {elements,sent,snapshot};
+  return {elements,sent,snapshot,receive:window.receive};
 }
 test('download stays disabled on the feed but can retry extraction for an opened note',()=>{
   const p=panel();p.snapshot({});assert.equal(p.elements.get('download').disabled,true);
@@ -28,7 +28,7 @@ test('partial selection requires at least one image before sending a task',()=>{
   p.elements.get('pick-some').checked=true;p.elements.get('select-none').onclick();
   const count=p.sent.length;p.elements.get('download').onclick();assert.equal(p.sent.length,count);
   p.elements.get('asset-picks').querySelectorAll=()=>[{value:'1'}];p.elements.get('download').onclick();
-  assert.deepEqual(p.sent.at(-1),{action:'download',indices:[1]});
+  assert.deepEqual(p.sent.at(-1),{action:'download',indices:[1],include_live:false,note_id:'abcdef0123456789abcdef01',expected_urls:['https://sns-img-bd.xhscdn.com/a','https://sns-img-bd.xhscdn.com/b']});
 });
 
 test('thumbnails load on demand, retain selection on progress updates and release preview on note change',()=>{
@@ -42,4 +42,11 @@ test('thumbnails load on demand, retain selection on progress updates and releas
   p.snapshot(note);assert.equal(grid.children[0],card);assert.equal(grid.querySelectorAll('input:checked').length,0);
   card.children[1].onclick();assert.equal(p.elements.get('preview-image').src,note.assets[0].url);
   p.snapshot({id:'other',assets:[]});assert.equal(p.elements.get('preview-image').src,undefined);assert.equal(grid.children.length,0);
+});
+
+test('LIVE selection is opt-in and new notes return from history to the download tab',()=>{
+  const p=panel();p.snapshot({id:'abcdef0123456789abcdef01',assets:[{url:'https://sns-img-bd.xhscdn.com/still',live_url:'https://sns-video-bd.xhscdn.com/motion',width:4032,height:3024}]});
+  assert.equal(p.elements.get('live-option').hidden,false);assert.equal(p.elements.get('include-live').checked,false);
+  p.elements.get('include-live').checked=true;p.elements.get('download').onclick();assert.equal(p.sent.at(-1).include_live,true);
+  p.receive({kind:'current_note'});assert.equal(p.elements.get('downloads').hidden,false);assert.equal(p.elements.get('history').hidden,true);assert.equal(p.elements.get('downloads').scrollTop,0);
 });

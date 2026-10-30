@@ -25,6 +25,6 @@ jobs:
       - name: Rust tests
         run: cargo test --locked
       - name: Page and sidebar tests (no external browser)
-        run: node --test tests/site.test.cjs tests/panel.test.cjs tests/search.test.cjs tests/bootstrap.test.cjs
+        run: node --test tests/site.test.cjs tests/panel.test.cjs tests/search.test.cjs tests/bootstrap.test.cjs tests/focus.test.cjs
       - name: Release build
         run: cargo build --release --locked

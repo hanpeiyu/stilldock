@@ -2,7 +2,7 @@
 !include "MUI2.nsh"
 !include "x64.nsh"
 !ifndef APP_VERSION
-  !define APP_VERSION "0.1.3"
+  !define APP_VERSION "0.2.0"
 !endif
 !ifndef APP_EXE
   !define APP_EXE "target\release\xhs-browser.exe"
@@ -10,8 +10,8 @@
 !ifndef WEBVIEW2_SETUP
   !define WEBVIEW2_SETUP "vendor\MicrosoftEdgeWebview2Setup.exe"
 !endif
-Name "拾光 Shiguang"
-OutFile "dist\Shiguang-${APP_VERSION}-windows-x64-setup.exe"
+Name "原帧 StillDock"
+OutFile "dist\StillDock-${APP_VERSION}-windows-x64-setup.exe"
 InstallDir "$LOCALAPPDATA\Programs\XhsBrowser"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
@@ -31,17 +31,22 @@ Section "安装"
     MessageBox MB_ICONSTOP "此版本需要 64 位 Windows 10 或更新版本。"
     Abort
   ${EndIf}
+  ; Clean up shortcuts belonging to the previous Shiguang preview only.
+  Delete "$DESKTOP\拾光小红书浏览器.lnk"
+  Delete "$SMPROGRAMS\拾光小红书浏览器\拾光.lnk"
+  Delete "$SMPROGRAMS\拾光小红书浏览器\卸载.lnk"
+  RMDir "$SMPROGRAMS\拾光小红书浏览器"
   SetOutPath "$INSTDIR"
   File /oname=xhs-browser.exe "${APP_EXE}"
   File "LICENSE"
   File "README.md"
   File "NOTICE.md"
   WriteUninstaller "$INSTDIR\uninstall.exe"
-  CreateShortcut "$DESKTOP\拾光小红书浏览器.lnk" "$INSTDIR\xhs-browser.exe"
-  CreateDirectory "$SMPROGRAMS\拾光小红书浏览器"
-  CreateShortcut "$SMPROGRAMS\拾光小红书浏览器\拾光.lnk" "$INSTDIR\xhs-browser.exe"
-  CreateShortcut "$SMPROGRAMS\拾光小红书浏览器\卸载.lnk" "$INSTDIR\uninstall.exe"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\XhsBrowserRust" "DisplayName" "拾光 Shiguang"
+  CreateShortcut "$DESKTOP\原帧小红书浏览器.lnk" "$INSTDIR\xhs-browser.exe"
+  CreateDirectory "$SMPROGRAMS\原帧小红书浏览器"
+  CreateShortcut "$SMPROGRAMS\原帧小红书浏览器\原帧.lnk" "$INSTDIR\xhs-browser.exe"
+  CreateShortcut "$SMPROGRAMS\原帧小红书浏览器\卸载.lnk" "$INSTDIR\uninstall.exe"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\XhsBrowserRust" "DisplayName" "原帧 StillDock"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\XhsBrowserRust" "DisplayVersion" "${APP_VERSION}"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\XhsBrowserRust" "UninstallString" '$\"$INSTDIR\uninstall.exe$\"'
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\XhsBrowserRust" "DisplayIcon" "$INSTDIR\xhs-browser.exe"
@@ -61,10 +66,10 @@ Section "安装"
 SectionEnd
 
 Section "Uninstall"
-  Delete "$DESKTOP\拾光小红书浏览器.lnk"
-  Delete "$SMPROGRAMS\拾光小红书浏览器\拾光.lnk"
-  Delete "$SMPROGRAMS\拾光小红书浏览器\卸载.lnk"
-  RMDir "$SMPROGRAMS\拾光小红书浏览器"
+  Delete "$DESKTOP\原帧小红书浏览器.lnk"
+  Delete "$SMPROGRAMS\原帧小红书浏览器\原帧.lnk"
+  Delete "$SMPROGRAMS\原帧小红书浏览器\卸载.lnk"
+  RMDir "$SMPROGRAMS\原帧小红书浏览器"
   Delete "$INSTDIR\xhs-browser.exe"
   Delete "$INSTDIR\README.md"
   Delete "$INSTDIR\NOTICE.md"

@@ -8,8 +8,8 @@ body:
   - type: input
     id: version
     attributes:
-      label: 拾光版本
-      placeholder: v0.1.3
+      label: 原帧版本
+      placeholder: v0.2.0
     validations:
       required: true
   - type: input

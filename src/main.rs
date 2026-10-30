@@ -5,7 +5,7 @@ mod store;
 
 use download::{SharedStore, Work};
 use fs2::FileExt;
-use model::{site_allowed, valid_note, Note};
+use model::{select_assets, site_allowed, valid_note, Note};
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
@@ -30,7 +30,7 @@ use wry::{
 enum Message {
     Ui(String),
     Site(String),
-    Capture(String, Option<Vec<usize>>),
+    Capture(String, Option<Vec<usize>>, bool, String, Vec<String>),
     Notify,
     Navigate(String),
     Open(String),
@@ -184,7 +184,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .open(base.join("instance.lock"))?;
     if lock.try_lock_exclusive().is_err() {
         rfd::MessageDialog::new()
-            .set_title("拾光")
+            .set_title("原帧")
             .set_description("程序已经运行，请使用现有窗口。")
             .show();
         return Ok(());
@@ -205,7 +205,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let event_loop = EventLoopBuilder::<Message>::with_user_event().build();
     let proxy = event_loop.create_proxy();
     let window = WindowBuilder::new()
-        .with_title("拾光 Shiguang · 小红书素材浏览器")
+        .with_title("StillDock · 原帧")
         .with_inner_size(LogicalSize::new(1380.0, 860.0))
         .with_min_inner_size(LogicalSize::new(900.0, 600.0))
         .build(&event_loop)?;
@@ -231,7 +231,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .with_autoplay(false)
         .with_initialization_script_for_main_only(initial, true)
         .with_ipc_handler(move |request| {
-            if site_allowed(&request.uri().to_string()) && request.body().len() < 256_000 {
+            if site_allowed(&request.uri().to_string()) && request.body().len() < 1_048_576 {
                 let _ = p.send_event(Message::Site(request.body().clone()));
             }
         })
@@ -268,7 +268,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         })
         .with_new_window_req_handler(|_, _| NewWindowResponse::Deny)
         .with_ipc_handler(move |r| {
-            if r.body().len() < 16_384 {
+            if r.body().len() < 262_144 {
                 let _ = p.send_event(Message::Ui(r.body().clone()));
             }
         })
@@ -309,7 +309,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             Event::UserEvent(Message::Site(raw))=>{
                 if let Ok(value)=serde_json::from_str::<Value>(&raw){match value["kind"].as_str(){
                     Some("search_start")=>{collapsed=false;layout(&window,&browser,&panel,collapsed);update=true;}
-                    Some("page")=>{if let Ok(note)=serde_json::from_value::<Note>(value["note"].clone()){if site_allowed(&note.url){current=note;update=true;}}}
+                    Some("page")=>{if let Ok(note)=serde_json::from_value::<Note>(value["note"].clone()){if site_allowed(&note.url){let newly_opened=!note.id.is_empty()&&note.id!=current.id;current=note;if newly_opened{send(&panel,json!({"kind":"current_note"}));}update=true;}}}
                     _=>{}
                 }}
             }
@@ -317,11 +317,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 let finished:Vec<_>=store.lock().unwrap().jobs().unwrap_or_default().into_iter().filter(|j|!["pending","running","pausing","cancelling"].contains(&j.state.as_str())).map(|j|j.id).collect();for id in finished{controls.remove(&id);}
                 if (finish_exit||pause_exit)&&!store.lock().unwrap().busy(){*flow=ControlFlow::Exit;}update=true;
             }
-            Event::UserEvent(Message::Capture(raw,indices))=>{
+            Event::UserEvent(Message::Capture(raw,indices,include_live,expected_id,expected_urls))=>{
                 let parsed=serde_json::from_str::<Value>(&raw).ok().and_then(|v|if let Some(s)=v.as_str(){serde_json::from_str::<Note>(s).ok()}else{serde_json::from_value::<Note>(v).ok()});
                 if let Some(mut note)=parsed{
-                    if let Some(selected)=indices{note.assets=note.assets.into_iter().enumerate().filter(|(i,_)|selected.contains(i)).map(|(_,a)|a).collect();}
-                    if valid_note(&note){let root=PathBuf::from(store.lock().unwrap().setting("folder",""));let result=store.lock().unwrap().add(&note,&root);match result{Ok(id)=>match enqueue(&store,&tx,&mut controls,id){Ok(())=>toast(&panel,"已加入下载队列"),Err(e)=>toast(&panel,e)},Err(e)=>toast(&panel,e)}}else{toast(&panel,"未能读取媒体地址，请等待笔记加载完成后重试");}
+                    if note.id!=expected_id || (indices.is_some() && note.assets.iter().map(|a|a.url.as_str()).collect::<Vec<_>>()!=expected_urls.iter().map(String::as_str).collect::<Vec<_>>()) {toast(&panel,"笔记或图片列表已经变化，请重新选择图片");} else {
+                    select_assets(&mut note,indices.as_deref(),include_live);
+                    if valid_note(&note){let root=PathBuf::from(store.lock().unwrap().setting("folder",""));let result=store.lock().unwrap().add(&note,&root);match result{Ok(id)=>match enqueue(&store,&tx,&mut controls,id){Ok(())=>toast(&panel,"已加入下载队列"),Err(e)=>toast(&panel,e)},Err(e)=>toast(&panel,e)}}else{toast(&panel,"未能读取媒体地址，请等待笔记加载完成后重试");}}
                 }else{toast(&panel,"笔记数据暂不可用，请重新打开笔记");}update=true;
             }
             Event::UserEvent(Message::Ui(raw))=>{
@@ -330,7 +331,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     "toggle"=>{collapsed=!collapsed;layout(&window,&browser,&panel,collapsed);update=true;},
                     "home"=>{let _=browser.load_url("https://www.xiaohongshu.com/explore");},
                     "back"=>{let _=browser.go_back();},"forward"=>{let _=browser.go_forward();},"reload"=>{let _=browser.reload();},
-                    "download"=>{if pause_exit{toast(&panel,"正在退出，请稍后重试");}else{let indices=v["indices"].as_array().map(|a|a.iter().filter_map(|i|i.as_u64().map(|n|n as usize)).collect());let p=proxy.clone();if browser.evaluate_script_with_callback("JSON.stringify(window.__xhsReadNote?window.__xhsReadNote():null)",move|s|{let _=p.send_event(Message::Capture(s,indices.clone()));}).is_err(){toast(&panel,"页面尚未就绪，请稍后重试");update=true;}}},
+                    "download"=>{if pause_exit{toast(&panel,"正在退出，请稍后重试");}else{let indices=v["indices"].as_array().map(|a|a.iter().filter_map(|i|i.as_u64().map(|n|n as usize)).collect());let expected_urls:Vec<String>=v["expected_urls"].as_array().map(|items|items.iter().filter_map(|s|s.as_str().map(str::to_owned)).collect()).unwrap_or_default();let include_live=v["include_live"].as_bool().unwrap_or(false);let expected_id=v["note_id"].as_str().unwrap_or("").to_owned();let p=proxy.clone();if browser.evaluate_script_with_callback("JSON.stringify(window.__xhsReadNote?window.__xhsReadNote():null)",move|s|{let _=p.send_event(Message::Capture(s,indices.clone(),include_live,expected_id.clone(),expected_urls.clone()));}).is_err(){toast(&panel,"页面尚未就绪，请稍后重试");update=true;}}},
                     "pause"|"cancel"=>{control(&store,&controls,id,v["action"]=="cancel");update=true;},
                     "resume"=>{if !pause_exit{if let Err(e)=enqueue(&store,&tx,&mut controls,id.to_owned()){toast(&panel,e)}}update=true;},
                     "pause_all"|"resume_all"=>{let jobs=store.lock().unwrap().jobs().unwrap_or_default();for job in jobs{if v["action"]=="pause_all"{control(&store,&controls,&job.id,false);}else if ["paused","failed"].contains(&job.state.as_str()){let _=enqueue(&store,&tx,&mut controls,job.id);}}update=true;},
@@ -357,7 +358,7 @@ fn main() {
             format!("启动失败：{error}\n\n请确认已安装 Microsoft Edge WebView2 Runtime。");
         eprintln!("{message}");
         rfd::MessageDialog::new()
-            .set_title("拾光 · 启动失败")
+            .set_title("原帧 · 启动失败")
             .set_description(message)
             .show();
     }
