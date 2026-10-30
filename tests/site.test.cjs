@@ -62,3 +62,9 @@ test('current-image extraction handles looped Swiper indices, image identity and
 test('a hidden or closing media container never yields a stale current image',()=>{
   assert.match(read('/explore/'+id,{current:true,hiddenMedia:true}).error,/打开/);
 });
+
+test('missing media does not shift original image numbers or select the wrong slide',()=>{
+  const images=[{urlDefault:''},{urlDefault:'https://sns-img-bd.xhscdn.com/second'}];
+  const active=read('/explore/'+id,{images,current:true,slideIndex:1});assert.equal(active.index,0);assert.equal(active.note.assets[0].sequence,2);
+  assert.match(read('/explore/'+id,{images,current:true,slideIndex:0}).error,/无法确认/);
+});

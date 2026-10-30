@@ -79,14 +79,22 @@ pub fn select_assets(note: &mut Note, selected: Option<&[usize]>, include_live: 
             continue;
         }
         let mut still = source.clone();
-        still.sequence = index + 1;
+        still.sequence = if source.sequence > 0 {
+            source.sequence
+        } else {
+            index + 1
+        };
         assets.push(still);
         if include_live && !source.video && !source.live_url.is_empty() {
             assets.push(Asset {
                 url: source.live_url.clone(),
                 video: true,
                 live: true,
-                sequence: index + 1,
+                sequence: if source.sequence > 0 {
+                    source.sequence
+                } else {
+                    index + 1
+                },
                 ..Default::default()
             });
         }
