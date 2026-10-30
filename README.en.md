@@ -15,9 +15,9 @@ A Windows tool focused on high-resolution, watermark-free Xiaohongshu material d
 
 ## High-resolution images and Live media
 
-The downloader first tries a high-resolution JPEG candidate exposed/derived from the opened note's platform media URL, checks the saved dimensions, and falls back explicitly to the webpage image if needed. `download-report.json` records actual dimensions, format, size, source and fallback reason. Files are not re-encoded locally. Available sources may not be the original camera file, and embedded author watermarks are not removed.
+The downloader first tries a high-resolution JPEG candidate exposed/derived from the opened note's platform media URL, checks the saved dimensions, and reports failure instead of silently replacing a failed high-resolution source with a low-resolution preview. `download-report.json` records actual dimensions, format, size and source. Files are not re-encoded locally. Available sources may not be the original camera file, and embedded author watermarks are not removed.
 
-Live images are identified in the selection grid. Still images are saved by default; an opt-in checkbox also saves the corresponding MP4 using the same original image number. This is an image/video pair, not a guaranteed importable iPhone Live Photo package. Note information is collapsed by default to leave room for the image, with an on-demand information button.
+Live images are identified in the selection grid. Still images are saved by default; an always-visible checkbox above the download button remembers its setting and also saves the corresponding MP4 using the same original image number. This is an image/video pair, not a guaranteed importable iPhone Live Photo package. An in-page Back to Search button and Escape key close the note, preferring native close to preserve the list and scroll position. Note information is collapsed by default to leave room for the image, with an on-demand information button.
 
 Previously named Shiguang; renamed StillDock at v0.2.0. Existing profiles, task databases and installation paths are retained.
 
@@ -40,7 +40,7 @@ On Windows x64, install Rust stable MSVC, Visual Studio C++ Build Tools and Wind
 ```powershell
 cargo fmt --check
 cargo test --locked
-node --test tests/site.test.cjs tests/panel.test.cjs tests/search.test.cjs tests/bootstrap.test.cjs tests/focus.test.cjs
+node --test tests/site.test.cjs tests/panel.test.cjs tests/search.test.cjs tests/bootstrap.test.cjs tests/focus.test.cjs tests/navigation.test.cjs
 cargo build --release --locked
 ```
 

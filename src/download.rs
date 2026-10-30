@@ -187,12 +187,11 @@ async fn transfer_file(
         (0, 0)
     } else {
         let size = imagesize::size(&part).map_err(|_| "无法读取图片分辨率，文件可能无效")?;
-        if high_quality
-            && asset.width > 0
+        if asset.width > 0
             && asset.height > 0
             && (size.width as u64 * size.height as u64) < (asset.width as u64 * asset.height as u64)
         {
-            return Err("高清候选图片分辨率低于笔记标注尺寸".into());
+            return Err("图片分辨率不符合要求，请重新打开笔记后重试".into());
         }
         (size.width, size.height)
     };
@@ -243,51 +242,31 @@ async fn run(
             &format!("正在处理第 {}/{} 项", index + 1, work.note.assets.len()),
         );
         notify();
-        let mut fallback_reason = String::new();
-        let mut source = if asset.video { "video" } else { "web" };
-        let transfer =
-            if !asset.video && !asset.original_url.is_empty() && asset.original_url != asset.url {
-                match transfer_file(
-                    client,
-                    store,
-                    work,
-                    asset,
-                    index,
-                    completed,
-                    notify,
-                    &asset.original_url,
-                    true,
-                )
-                .await
-                {
-                    Ok(file) => {
-                        source = "high_resolution";
-                        file
-                    }
-                    Err(error) => {
-                        if *work.control.borrow() != 0 {
-                            return Err(error);
-                        }
-                        fallback_reason = error;
-                        source = "web_fallback";
-                        store.lock().unwrap().state(
-                            &work.id,
-                            "running",
-                            "高清候选不可用，正在回退网页图片",
-                        );
-                        notify();
-                        transfer_file(
-                            client, store, work, asset, index, completed, notify, &asset.url, false,
-                        )
-                        .await?
-                    }
-                }
+        let has_original =
+            !asset.video && !asset.original_url.is_empty() && asset.original_url != asset.url;
+        let source = if asset.video {
+            "video"
+        } else if has_original {
+            "high_resolution"
+        } else {
+            "web"
+        };
+        let transfer = transfer_file(
+            client,
+            store,
+            work,
+            asset,
+            index,
+            completed,
+            notify,
+            if has_original {
+                &asset.original_url
             } else {
-                transfer_file(
-                    client, store, work, asset, index, completed, notify, &asset.url, false,
-                )
-                .await?
-            };
+                &asset.url
+            },
+            has_original,
+        )
+        .await?;
         let sequence = if asset.sequence > 0 {
             asset.sequence
         } else {
@@ -313,8 +292,6 @@ async fn run(
         // After a source succeeds, discard only this item's unused candidate partial.
         let unused_part = if source == "high_resolution" {
             Some(work.folder.join(format!("{:03}.part", index + 1)))
-        } else if source == "web_fallback" {
-            Some(work.folder.join(format!("{:03}-hq.part", index + 1)))
         } else {
             None
         };
@@ -324,7 +301,7 @@ async fn run(
         report.retain(|r| r["index"].as_u64() != Some(index as u64));
         report.push(serde_json::json!({"index":index,"sequence":sequence,"live":asset.live,"video":asset.video,
             "filename":destination.file_name().unwrap_or_default().to_string_lossy(),"bytes":transfer.bytes,
-            "width":transfer.width,"height":transfer.height,"format":transfer.ext,"source":source,"fallback_reason":fallback_reason}));
+            "width":transfer.width,"height":transfer.height,"format":transfer.ext,"source":source}));
         tokio::fs::write(
             &report_path,
             serde_json::to_vec_pretty(&report).map_err(|_| "下载报告编码失败")?,
@@ -336,37 +313,10 @@ async fn run(
             .unwrap()
             .file_done(&work.id, index, &destination, transfer.bytes);
         completed += transfer.bytes;
-        let detail = if asset.video {
-            if asset.live {
-                "LIVE 动态片段".to_owned()
-            } else {
-                "视频".to_owned()
-            }
-        } else {
-            format!(
-                "{} · {}×{}",
-                if source == "high_resolution" {
-                    "高清源"
-                } else if source == "web_fallback" {
-                    "已回退网页图片"
-                } else {
-                    "网页资源，未验证高清源"
-                },
-                transfer.width,
-                transfer.height
-            )
-        };
         store.lock().unwrap().state(
             &work.id,
             "running",
-            &format!(
-                "第 {}/{} 项 · {} · {} · {:.1} MB",
-                index + 1,
-                work.note.assets.len(),
-                detail,
-                transfer.ext,
-                transfer.bytes as f64 / 1048576.0
-            ),
+            &format!("已保存第 {}/{} 项", index + 1, work.note.assets.len()),
         );
         store
             .lock()
@@ -374,11 +324,6 @@ async fn run(
             .progress(&work.id, completed, completed);
         notify();
     }
-    let fallback = report
-        .iter()
-        .filter(|r| r["source"] == "web_fallback")
-        .count();
-    let web = report.iter().filter(|r| r["source"] == "web").count();
     let live = report.iter().filter(|r| r["live"] == true).count();
     let mut summary = format!(
         "完成 {} 项 · {:.1} MB",
@@ -387,12 +332,6 @@ async fn run(
     );
     if live > 0 {
         summary.push_str(&format!(" · {live} 个 LIVE 片段"));
-    }
-    if fallback > 0 {
-        summary.push_str(&format!(" · {fallback} 张已回退网页图片"));
-    }
-    if web > 0 {
-        summary.push_str(&format!(" · {web} 张未验证高清源"));
     }
     if let Some(image) = report.iter().find(|r| r["width"].as_u64().unwrap_or(0) > 0) {
         summary.push_str(&format!(" · {}×{}", image["width"], image["height"]));
@@ -427,7 +366,7 @@ mod tests {
         (url, thread)
     }
     #[test]
-    fn smaller_hd_falls_back_and_live_pairs_share_sequence() {
+    fn smaller_hd_is_rejected_and_live_pairs_share_sequence() {
         let root =
             std::env::temp_dir().join(format!("stilldock-quality-test-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
@@ -441,7 +380,7 @@ mod tests {
             data
         };
         let (hq, hq_thread) = server(png(1, 1), false);
-        let (web, web_thread) = server(png(2, 3), false);
+        let web = "http://127.0.0.1:1/must-not-fallback".to_owned();
         let (live, live_thread) = server(
             b"\x00\x00\x00\x18ftypisom\x00\x00\x00\x00isommp42".to_vec(),
             false,
@@ -481,26 +420,28 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
+        let error = rt
+            .block_on(run(&reqwest::Client::new(), &store, &mut work, &|| {}))
+            .unwrap_err();
+        hq_thread.join().unwrap();
+        assert!(error.contains("分辨率"));
+        assert!(!folder.join("002_pair.png").exists());
+        let (valid_hq, valid_thread) = server(png(2, 3), false);
+        work.note.assets[0].original_url = valid_hq;
         let summary = rt
             .block_on(run(&reqwest::Client::new(), &store, &mut work, &|| {}))
             .unwrap();
-        hq_thread.join().unwrap();
-        web_thread.join().unwrap();
+        valid_thread.join().unwrap();
         live_thread.join().unwrap();
-        assert!(summary.contains("1 张已回退"));
         assert!(summary.contains("1 个 LIVE"));
         assert!(folder.join("002_pair.png").is_file());
         assert!(folder.join("002_live_pair.mp4").is_file());
         let report: Vec<serde_json::Value> =
             serde_json::from_slice(&std::fs::read(folder.join("download-report.json")).unwrap())
                 .unwrap();
-        assert_eq!(report[0]["source"], "web_fallback");
+        assert_eq!(report[0]["source"], "high_resolution");
         assert_eq!(report[0]["width"], 2);
         assert_eq!(report[0]["height"], 3);
-        assert!(report[0]["fallback_reason"]
-            .as_str()
-            .unwrap()
-            .contains("分辨率"));
         drop(work);
         drop(store);
         let _ = std::fs::remove_dir_all(root);

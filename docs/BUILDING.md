@@ -17,7 +17,7 @@
 ```powershell
 cargo fmt --check
 cargo test --locked
-node --test tests/site.test.cjs tests/panel.test.cjs tests/search.test.cjs tests/bootstrap.test.cjs tests/focus.test.cjs
+node --test tests/site.test.cjs tests/panel.test.cjs tests/search.test.cjs tests/bootstrap.test.cjs tests/focus.test.cjs tests/navigation.test.cjs
 cargo build --release --locked
 .\target\release\xhs-browser.exe
 ```

@@ -50,3 +50,9 @@ test('LIVE selection is opt-in and new notes return from history to the download
   p.elements.get('include-live').checked=true;p.elements.get('download').onclick();assert.equal(p.sent.at(-1).include_live,true);
   p.receive({kind:'current_note'});assert.equal(p.elements.get('downloads').hidden,false);assert.equal(p.elements.get('history').hidden,true);assert.equal(p.elements.get('downloads').scrollTop,0);
 });
+
+test('LIVE control stays visible before opening a note and saves its preference',()=>{
+  const p=panel();p.snapshot({});assert.equal(p.elements.get('live-option').hidden,false);
+  const toggle=p.elements.get('include-live');toggle.checked=true;toggle.onchange();assert.deepEqual(p.sent.at(-1),{action:'setting',key:'include_live',value:true});
+  p.snapshot({id:'abcdef0123456789abcdef01',assets:[]});assert.equal(toggle.checked,true);assert.equal(p.elements.get('quality').textContent,'');
+});

@@ -86,7 +86,7 @@ fn snapshot(panel: &WebView, store: &SharedStore, note: &Note, collapsed: bool, 
         panel,
         json!({"kind":"snapshot","jobs":db.jobs().unwrap_or_default(),"note":note,"collapsed":collapsed,
         "folder":db.setting("folder",""),"focus":db.setting("focus","true")=="true","ai":db.setting("ai","true")=="true",
-        "comments":db.setting("comments","true")=="true","original":db.setting("original","false")=="true",
+        "include_live":db.setting("include_live","false")=="true","comments":db.setting("comments","true")=="true","original":db.setting("original","false")=="true",
         "about":format!("Windows 10/11 · WebView2 · v{} · 本次运行 {:.0} 秒",env!("CARGO_PKG_VERSION"),started.elapsed().as_secs_f64())}),
     );
 }
@@ -219,7 +219,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         "{}\nwindow.__xhsInstallAdapters=()=>{{{}}};\n{}",
         bootstrap,
         adapters(&store),
-        include_str!("../assets/site.js")
+        format!(
+            "{}\n{}",
+            include_str!("../assets/navigation.js"),
+            include_str!("../assets/site.js")
+        )
     );
     let browser = WebViewBuilder::new_with_web_context(&mut context)
         .with_url("https://www.xiaohongshu.com/explore")
@@ -340,7 +344,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     "open_note"=>{if let Ok((n,_,_))=store.lock().unwrap().payload(id){if site_allowed(&n.url){let _=browser.load_url(&n.url);}}},
                     "link"=>{let url=v["url"].as_str().unwrap_or("").trim();if site_allowed(url){let _=browser.load_url(url);}else{toast(&panel,"只支持完整的 HTTPS 小红书链接");}},
                     "choose_folder"=>{if let Some(path)=rfd::FileDialog::new().set_title("选择下载文件夹").pick_folder(){let test=path.join(".xhs-write-check");match OpenOptions::new().create_new(true).write(true).open(&test){Ok(f)=>{drop(f);let _=std::fs::remove_file(test);let _=store.lock().unwrap().set_setting("folder",&path.to_string_lossy());toast(&panel,"已保存，新任务使用新目录");},Err(_)=>toast(&panel,"该目录不可写，请更换目录")}}update=true;},
-                    "setting"=>{if let Some(key)=v["key"].as_str(){if ["focus","ai","comments","original"].contains(&key){let _=store.lock().unwrap().set_setting(key,if v["value"].as_bool().unwrap_or(false){"true"}else{"false"});let _=browser.evaluate_script(&adapters(&store));let initial=format!("window.__xhsInstallAdapters=()=>{{{}}}",adapters(&store));let _=browser.evaluate_script(&initial);toast(&panel,"已更新浏览模式");}}update=true;},
+                    "setting"=>{if let Some(key)=v["key"].as_str(){if key=="include_live"{let _=store.lock().unwrap().set_setting(key,if v["value"].as_bool().unwrap_or(false){"true"}else{"false"});}else if ["focus","ai","comments","original"].contains(&key){let _=store.lock().unwrap().set_setting(key,if v["value"].as_bool().unwrap_or(false){"true"}else{"false"});let _=browser.evaluate_script(&adapters(&store));let initial=format!("window.__xhsInstallAdapters=()=>{{{}}}",adapters(&store));let _=browser.evaluate_script(&initial);toast(&panel,"已更新浏览模式");}}update=true;},
                     "pause_exit"=>{pause_exit=true;let jobs=store.lock().unwrap().jobs().unwrap_or_default();for job in jobs{control(&store,&controls,&job.id,false);}if !store.lock().unwrap().busy(){*flow=ControlFlow::Exit;}update=true;},
                     "finish_exit"=>{finish_exit=true;toast(&panel,"队列处理结束后退出");if !store.lock().unwrap().busy(){*flow=ControlFlow::Exit;}},
                     "stay"=>{finish_exit=false;},_=>{}
