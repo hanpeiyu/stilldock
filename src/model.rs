@@ -72,6 +72,31 @@ pub fn valid_note(note: &Note) -> bool {
         })
 }
 
+pub fn select_current_assets(
+    current: &Note,
+    mut captured: Note,
+    indices: &[usize],
+    include_live: bool,
+) -> Result<Note, String> {
+    if captured.id != current.id
+        || captured
+            .assets
+            .iter()
+            .map(|a| &a.url)
+            .ne(current.assets.iter().map(|a| &a.url))
+    {
+        return Err("笔记或图片列表已变化，请重新选择".into());
+    }
+    if indices.is_empty() || indices.iter().any(|i| *i >= captured.assets.len()) {
+        return Err("请选择有效的图片序号".into());
+    }
+    select_assets(&mut captured, Some(indices), include_live);
+    if !valid_note(&captured) {
+        return Err("图片尚未就绪，请稍后重试".into());
+    }
+    Ok(captured)
+}
+
 pub fn select_assets(note: &mut Note, selected: Option<&[usize]>, include_live: bool) {
     let mut assets = Vec::new();
     for (index, source) in note.assets.iter().enumerate() {
@@ -177,6 +202,41 @@ mod tests {
         assert!(valid_note(&note));
         note.assets[0].original_url = "https://evil.example/image".into();
         assert!(!valid_note(&note));
+    }
+
+    #[test]
+    fn material_capture_rejects_stale_or_invalid_selection_and_keeps_live_pairs() {
+        let note = Note {
+            id: "abcdef0123456789abcdef01".into(),
+            url: "https://www.xiaohongshu.com/explore/abcdef0123456789abcdef01".into(),
+            assets: vec![
+                Asset {
+                    url: "https://sns-img-bd.xhscdn.com/first".into(),
+                    sequence: 2,
+                    ..Default::default()
+                },
+                Asset {
+                    url: "https://sns-img-bd.xhscdn.com/second".into(),
+                    sequence: 7,
+                    live_url: "https://sns-video-bd.xhscdn.com/live".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let selected = select_current_assets(&note, note.clone(), &[1], true).unwrap();
+        assert_eq!(selected.assets.len(), 2);
+        assert_eq!(selected.assets[0].sequence, 7);
+        assert_eq!(selected.assets[1].sequence, 7);
+        assert!(selected.assets[1].live);
+        assert!(select_current_assets(&note, note.clone(), &[], false).is_err());
+        assert!(select_current_assets(&note, note.clone(), &[2], false).is_err());
+        let mut stale = note.clone();
+        stale.assets.reverse();
+        assert!(select_current_assets(&note, stale, &[0], false).is_err());
+        let mut bad = note.clone();
+        bad.assets[1].original_url = "https://evil.example/image".into();
+        assert!(select_current_assets(&note, bad, &[1], false).is_err());
     }
 
     #[test]

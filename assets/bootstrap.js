@@ -16,6 +16,7 @@
       html[data-xhs-hide-ai] #ask_diandian,html[data-xhs-hide-ai] .ai-chat-section,html[data-xhs-hide-ai] .bottom-menu-ai{display:none!important}
       html[data-xhs-boot] body{visibility:hidden!important}
       html[data-xhs-boot]::before{content:'正在加载搜索…';position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);padding-top:62px;background:url('__BRAND_ICON__') center top/48px 48px no-repeat;color:#92929c;font:13px \"Segoe UI\",sans-serif}`;
+    if(options.materials&&(/\/(?:explore|discovery\/item|search_result)\/[a-f0-9]{24}/i.test(location.pathname))){root.setAttribute('data-sd-material-pending','');style.textContent+='html[data-sd-material-pending] #noteContainer,html[data-sd-material-pending] .note-detail-mask{visibility:hidden!important}';setTimeout(()=>root.removeAttribute('data-sd-material-pending'),1000);}
     root.append(style);
     if(options.focus&&/^\/(?:explore)?\/?$/.test(location.pathname)){
       root.setAttribute('data-xhs-boot','');

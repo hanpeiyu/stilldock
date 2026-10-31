@@ -71,3 +71,9 @@ Save location, layout and JSON preference are frozen when a job is created. Exis
 Download history and current file availability are separate. A bounded background worker checks recorded paths and byte sizes at startup, on opening a note, and on visiting history (up to 200 completed jobs). Missing or size-changed files can be repaired in the same job; intact files are skipped. Inaccessible storage is reported separately and never triggers automatic downloads.
 
 After moving a complete task's files, use **关联新目录** in history. All original filenames and sizes must match in the selected folder before paths are updated atomically. No files are moved or copied. This is not a content hash check; partial moves, renames and same-size content modifications are not detected/relinked automatically.
+
+## Material grid
+
+Image posts open in an adaptive card grid with shared sidebar selection, select/invert/clear, one-image preview and selected downloads. LIVE uses the existing preference and original image numbering. Escape closes the preview first, then returns through native note closing. Switch to the carousel per post or disable the default grid in settings; video and unrecognized posts retain native rendering.
+
+Cards are virtualized by visible rows, thumbnails load near the viewport, and preview image references/observers are released on leaving. Shadow DOM isolates website CSS. Native detail interactions and video playback are suspended while covered, but the underlying page DOM remains available for returning to the same search position. This does not guarantee immediate WebView2 process memory reclamation.

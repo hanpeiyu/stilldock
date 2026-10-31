@@ -83,7 +83,7 @@
     if (event.button!==2) return;
     suppressUntil=0;
     if (!enabled || event.pointerType!=='mouse' || event.buttons!==2 || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return;
-    if (event.target?.closest?.('input,textarea,select,[contenteditable="true"],[role="textbox"]')) return;
+    if ((event.composedPath?.()||[event.target]).some(node=>node?.closest?.('input,textarea,select,[contenteditable="true"],[role="textbox"]'))) return;
     if (active) clean();
     let noteId='';try {noteId=window.__xhsReadNote?.().id||'';}catch{}
     active={startX:event.clientX,startY:event.clientY,x:event.clientX,y:event.clientY,started:now(),pointerId:event.pointerId,length:0,maxDistance:0,consumed:false,points:[[event.clientX,event.clientY]],href:location.href,noteId};

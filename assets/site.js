@@ -36,7 +36,8 @@
     const valid=id=>typeof id==='string'&&/^[a-f0-9]{24}$/i.test(id);
     const pathId=(location.pathname.match(/\/(?:explore|discovery\/item|search_result)\/([a-f0-9]{24})(?:\/|$)/i)||[])[1];
     const sourceUrl=new URL(location.href);
-    const modal=document.querySelector('#noteContainer,.note-detail-mask');
+    let modal=document.querySelector('#noteContainer,.note-detail-mask');
+    if(modal&&((modal.getClientRects&& !modal.getClientRects().length)||modal.getAttribute?.('aria-hidden')==='true'||getComputedStyle(modal).display==='none'))modal=null;
     const queryId=sourceUrl.searchParams.get('noteId')||sourceUrl.searchParams.get('note_id');
     const modalId=unwrap(state?.currentNoteId);
     const map=unwrap(state?.noteDetailMap)||{};
@@ -90,6 +91,7 @@
     return result;
   };
   window.__xhsReadCurrentImage = () => {
+    const material=window.__stillDockMaterial?.currentImage?.();if(material)return material;
     const note=window.__xhsReadNote();
     if(!note.id||!note.assets.length||note.assets.some(a=>a.video))return {error:'请先打开一篇图片笔记'};
     const media=document.querySelector('#noteContainer .media-container,.note-detail-mask .media-container');
@@ -109,7 +111,7 @@
   };
   function report(){
     searchRoute();
-    try{const note=window.__xhsReadNote();const value=JSON.stringify({kind:'page',note});if(value!==last){last=value;send(JSON.parse(value));}}catch{}
+    try{const note=window.__xhsReadNote();window.__stillDockMaterial?.update(note);const value=JSON.stringify({kind:'page',note});if(value!==last){last=value;send(JSON.parse(value));}}catch{}
   }
   function schedule(){if(!timer)timer=setTimeout(()=>{timer=null;report();},180);}
   const originalPush=history.pushState,originalReplace=history.replaceState;

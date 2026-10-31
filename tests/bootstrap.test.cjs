@@ -3,11 +3,11 @@ const assert=require('node:assert/strict');
 const vm=require('node:vm');
 const fs=require('node:fs');
 const path=require('node:path');
-function boot({focus=true,ai=true,route='/explore',rootPresent=true}={}){
+function boot({focus=true,ai=true,route='/explore',rootPresent=true,materials=false}={}){
   const attrs=new Set(),nodes=[],timers=[],observers=[];
   const root={setAttribute:k=>attrs.add(k),removeAttribute:k=>attrs.delete(k),append:n=>nodes.push(n)};
   const document={documentElement:rootPresent?root:null,createElement:()=>({})};const window={};
-  const source=fs.readFileSync(path.join(__dirname,'../assets/bootstrap.js'),'utf8').replace('__BOOT_CONFIG__',JSON.stringify({focus,ai}));
+  const source=fs.readFileSync(path.join(__dirname,'../assets/bootstrap.js'),'utf8').replace('__BOOT_CONFIG__',JSON.stringify({focus,ai,materials}));
   vm.runInNewContext(source,{window,document,location:{hostname:'www.xiaohongshu.com',pathname:route},setTimeout:(fn,ms)=>{timers.push({fn,ms});return timers.length},clearTimeout(){},addEventListener(){},MutationObserver:function(fn){observers.push(fn);this.observe=()=>{};this.disconnect=()=>{};}});
   return {attrs,nodes,timers,window,document,root,observers};
 }
@@ -22,4 +22,10 @@ test('timeout releases unknown layouts and original mode does not conceal the pa
 });
 test('document creation without an html root attaches styles as soon as it exists',()=>{
   const b=boot({rootPresent:false});assert.equal(b.nodes.length,0);b.document.documentElement=b.root;b.observers[0]();assert.equal(b.nodes.length,1);assert.ok(b.attrs.has('data-xhs-boot'));
+});
+
+test('direct note bootstrap has a bounded material transition and leaves ordinary pages alone',()=>{
+  const p=boot({route:'/explore/abcdef0123456789abcdef01',materials:true});assert.equal(p.attrs.has('data-sd-material-pending'),true);
+  assert.equal(p.timers[0].ms,1000);p.timers[0].fn();assert.equal(p.attrs.has('data-sd-material-pending'),false);
+  assert.equal(boot({route:'/search_result',materials:true}).attrs.has('data-sd-material-pending'),false);
 });

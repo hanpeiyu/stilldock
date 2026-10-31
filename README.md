@@ -17,7 +17,7 @@
 - **原生搜索**：保留小红书的搜索记录、建议与登录交互。
 - **专注浏览**：首页居中原生搜索框，精简无关导航，支持屏蔽点点 AI、折叠评论；随时恢复原网页。
 - **同窗下载**：开始搜索时自动展开侧栏，浏览区域随窗口大小调整。
-- **看图挑选**：图集缩略图按需加载，支持编号、勾选、全选/清空和放大预览，也可保存整篇笔记。
+- **素材网格**：图片帖默认展开为等宽卡片，保持完整画面，支持编号、勾选、全选/反选/清空和大图预览；与右侧栏选图同步。
 - **可靠队列**：图片和视频下载、暂停/继续/取消、退出恢复、本地历史及按笔记打开目录。
 - **轻量分发**：HTML/CSS/JS 编译进 exe；运行不需要 Python、Node.js、.NET 或外部 Chrome。
 
@@ -57,6 +57,16 @@
 轻点右键保持原网页菜单行为。划动不足 56 CSS 像素不触发；斜划、上划、明显回折、超过 5 秒、释放在窗口外都会取消。Esc、窗口失焦或指针取消也会取消手势，Esc 不会顺带关闭笔记。输入框内或按住 Shift/Ctrl/Alt/Win 时不启用手势。
 
 设置中可关闭“启用右键手势”。当前图片无法确认时不会猜测下载，会提示使用侧栏选图。快速保存同一笔记的不同图片可分别排队；正在排队的同一张会拦截重复添加。
+
+## 帖子素材视图
+
+打开图片帖后默认展示网格。点击图片卡片勾选，双击或点“放大”预览；底部下载选中的图片，LIVE 开关与右侧栏共用。预览中用 ← → 切换、下载当前一张；Esc 先关预览，再按返回搜索。图片原序号与 Live 配对沿用原有下载逻辑，高清源仍在实际下载时获取。
+
+- 右上角“轮播视图”回到原详情；再点“素材网格”可返回。设置可关闭“帖子默认使用素材网格”，也可“显示原网页”。
+- 视频帖和无法读取的帖子保留原生页面；检测到登录或验证弹窗时优先让出界面。
+- 网格按可见行回收卡片，缩略图接近视口才加载；大图只按需预览一张，关闭/离开时释放图片引用和观察器。
+- 布局使用 Shadow DOM 隔离网站样式。原详情暂时隐藏并禁用交互，视频暂停；返回时恢复原生关闭以保留搜索位置。原网页 DOM 仍保留，不承诺 WebView2 立刻归还全部进程内存。
+- 直接打开帖子有最长一秒的原详情显示过渡保护，读取失败会放行，避免留下空白遮罩。
 
 ## 本地文件被移动或删除
 
@@ -103,7 +113,7 @@ git clone https://github.com/hanpeiyu/stilldock.git
 cd stilldock
 cargo fmt --check
 cargo test --locked
-node --test tests/site.test.cjs tests/panel.test.cjs tests/search.test.cjs tests/bootstrap.test.cjs tests/focus.test.cjs tests/navigation.test.cjs tests/gestures.test.cjs
+node --test tests/site.test.cjs tests/panel.test.cjs tests/search.test.cjs tests/bootstrap.test.cjs tests/focus.test.cjs tests/navigation.test.cjs tests/gestures.test.cjs tests/materials.test.cjs
 cargo build --release --locked
 ```
 

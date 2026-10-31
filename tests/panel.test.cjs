@@ -81,3 +81,13 @@ test('local file state stays separate from download history and repair is blocke
   assert.equal(article.querySelector('.actions').children.some(b=>b.textContent==='补下缺失 / 异常项'),false);
   p.elements.get('check-local').onclick();assert.deepEqual(p.sent.at(-1),{action:'check_local'});
 });
+
+test('material selection mirrors into sidebar without echo and sidebar changes send original indices',()=>{
+  const p=panel(),note={id:'abcdef0123456789abcdef01',assets:[{url:'https://sns-img-bd.xhscdn.com/first'},{url:'https://sns-img-bd.xhscdn.com/second'},{url:'https://sns-img-bd.xhscdn.com/third'}]};
+  const before=p.sent.length;p.snapshot(note,{selection:[1],material_view:true});
+  assert.equal(p.sent.length,before);assert.equal(p.elements.get('pick-some').checked,true);
+  assert.deepEqual(p.elements.get('asset-picks').querySelectorAll('input:checked').map(n=>Number(n.value)),[1]);
+  p.elements.get('select-all').onclick();assert.deepEqual(p.sent.at(-1),{action:'selection',note_id:note.id,indices:[0,1,2]});
+  p.elements.get('select-none').onclick();assert.deepEqual(p.sent.at(-1).indices,[]);
+  p.elements.get('material_view').checked=false;p.elements.get('material_view').onchange();assert.deepEqual(p.sent.at(-1),{action:'setting',key:'material_view',value:false});
+});

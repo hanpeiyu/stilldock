@@ -66,3 +66,9 @@ Asset 包含网页 URL、高清候选、缩略图、Live 视频地址及笔记�
 `local_files.rs` inspects only recorded paths and byte sizes on one background worker. A bounded channel allows at most one pending request; local status is separate from persisted job completion and bounded to visible recent history. Database locks are released before filesystem checks. Startup/history checks are bounded to 200 completed tasks; opening a note requests a targeted check.
 
 Repair reuses the existing job and fixed storage options. The transfer loop rechecks each saved file before skipping; non-NotFound IO errors stop the task. Relocation is explicit, requires all filenames/sizes to match, and updates job folder, cache path and file paths in one SQLite transaction guarded by completed state and original folder. No watcher, recursive disk scan, automatic deletion, or content-hash guarantee is introduced.
+
+## Material workspace
+
+`materials.js` mounts a disposable Shadow DOM workspace inside the existing site WebView. It reads the same note bridge and preserves asset indices/sequences. Row virtualization retains nearby cards only; IntersectionObserver loads previews, ResizeObserver updates columns, and close/leave tears down observers, animation work and image sources. Native detail is hidden/inert, video play events are paused, and native closing is restored before returning.
+
+Selection is shared through `material_selection`/panel `selection` IPC and snapshots without echo. `material_download` is revalidated with `select_current_assets` against the current note and source list before joining the existing queue. Feedback is scoped to the captured note ID. Settings persist default grid and LIVE behavior in SQLite. Video/unknown posts fail open to native content; the original page DOM is retained for search position preservation.

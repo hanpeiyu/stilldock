@@ -25,7 +25,7 @@
     return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
   }
   function noteOpen() {
-    return noteRoute(location.href) || [...document.querySelectorAll('#noteContainer,.note-detail-mask')].some(visible);
+    return window.__stillDockMaterial?.isOpen?.() || noteRoute(location.href) || [...document.querySelectorAll('#noteContainer,.note-detail-mask')].some(visible);
   }
   function remember(raw) {
     const url = listUrl(raw);
@@ -49,6 +49,8 @@
   }
   function back() {
     if (busy || !noteOpen()) return;
+    if(window.__stillDockMaterial?.closePreview?.())return;
+    window.__stillDockMaterial?.prepareBack?.();
     busy = true;
     if (button) button.disabled = true;
     const close = [...document.querySelectorAll('.note-detail-mask .close-circle,.note-detail-mask .close-icon,.close-circle,[aria-label="关闭笔记"]')]
@@ -88,6 +90,7 @@
   document.addEventListener('keydown', event => {
     if (event.key !== 'Escape' || event.isComposing) return;
     if (window.__stillDockGestures?.cancelActive?.()) {event.preventDefault();event.stopImmediatePropagation();return;}
+    if(window.__stillDockMaterial?.closePreview?.()){event.preventDefault();event.stopImmediatePropagation();return;}
     if (!noteOpen()) return;
     event.preventDefault(); event.stopImmediatePropagation(); back();
   }, true);

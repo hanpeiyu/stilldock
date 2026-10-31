@@ -4,7 +4,7 @@ const vm=require('node:vm');
 const fs=require('node:fs');
 const script=fs.readFileSync(require('node:path').join(__dirname,'../assets/site.js'),'utf8');
 const id='abcdef0123456789abcdef01';
-function read(path,{modal=false,stateId=id,mapKey=id,wrapped=false,images,current=false,slideIndex,activeSrc,counter,hiddenMedia=false}={}){
+function read(path,{modal=false,stateId=id,mapKey=id,wrapped=false,images,current=false,slideIndex,activeSrc,counter,hiddenMedia=false,hiddenModal=false}={}){
   const location=new URL('https://www.xiaohongshu.com'+path);
   const window={ipc:{postMessage(){}},__INITIAL_STATE__:{note:{currentNoteId:{value:stateId},noteDetailMap:{[mapKey]:{note:{title:'测试图集',imageList:[{urlDefault:'http://sns-img-bd.xhscdn.com/image'}]}}}}}};
   if(images)window.__INITIAL_STATE__.note.noteDetailMap[mapKey].note.imageList=images;
@@ -12,7 +12,7 @@ function read(path,{modal=false,stateId=id,mapKey=id,wrapped=false,images,curren
   window.top=window;window.window=window;
   const active={getAttribute:()=>slideIndex===undefined?null:String(slideIndex),querySelector:()=>activeSrc?{currentSrc:activeSrc}:null};
   const media={getClientRects:()=>hiddenMedia?[]:[{}],querySelector:s=>s==='.swiper-slide-active'&&(slideIndex!==undefined||activeSrc)?active:s==='.swiper-pagination-current'&&counter?{textContent:String(counter)}:null};
-  const document={readyState:'loading',title:'小红书',querySelector:s=>current&&s.includes('.media-container')?media:modal&&s.includes('#noteContainer')?{}:null,addEventListener(){}};
+  const document={readyState:'loading',title:'小红书',querySelector:s=>current&&s.includes('.media-container')?media:modal&&s.includes('#noteContainer')?(hiddenModal?{getClientRects:()=>[]}:{}):null,addEventListener(){}};
   vm.runInNewContext(script,{window,document,location,URL,getComputedStyle:()=>({visibility:'visible'}),history:{pushState(){},replaceState(){}},addEventListener(){},setTimeout(){}});
   return current?window.__xhsReadCurrentImage():window.__xhsReadNote();
 }
@@ -67,4 +67,8 @@ test('missing media does not shift original image numbers or select the wrong sl
   const images=[{urlDefault:''},{urlDefault:'https://sns-img-bd.xhscdn.com/second'}];
   const active=read('/explore/'+id,{images,current:true,slideIndex:1});assert.equal(active.index,0);assert.equal(active.note.assets[0].sequence,2);
   assert.match(read('/explore/'+id,{images,current:true,slideIndex:0}).error,/无法确认/);
+});
+
+test('a retained but display-hidden native modal cannot keep a stale material note open',()=>{
+  assert.equal(read('/search_result?keyword=test',{modal:true,hiddenModal:true}).id,'');
 });

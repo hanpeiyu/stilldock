@@ -47,3 +47,7 @@ test('adding another mouse button or modifier mid-stroke cancels',()=>{
   const p=boot();p.emit('pointerdown');p.emit('pointermove',{clientX:300,buttons:3});p.emit('pointerup',{clientX:300,buttons:1});assert.equal(p.actions().length,0);
   const q=boot();q.emit('pointerdown');q.emit('pointerup',{clientX:300,buttons:0,shiftKey:true});assert.equal(q.actions().length,0);
 });
+
+test('inputs inside a material shadow root preserve their normal right-click behavior',()=>{
+  const p=boot();p.emit('pointerdown',{composedPath:()=>[{closest:()=>({})},{closest:()=>null}]});p.emit('pointerup',{clientX:300,buttons:0});assert.equal(p.actions().length,0);assert.equal(p.emit('contextmenu').prevented,false);
+});
