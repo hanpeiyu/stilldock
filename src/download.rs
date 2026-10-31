@@ -2,6 +2,7 @@ use crate::{
     model::{file_extension, media_allowed, safe_name, Asset, Note},
     store::{DownloadOptions, SavedFile, Store},
 };
+use sha2::{Digest, Sha256};
 use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -57,8 +58,30 @@ struct Transfer {
     ext: &'static str,
     width: usize,
     height: usize,
+    sha256: String,
 }
 
+#[derive(Debug)]
+struct TransferFailure {
+    message: String,
+    retryable: bool,
+}
+impl TransferFailure {
+    fn retry(message: &str) -> Self {
+        Self {
+            message: message.into(),
+            retryable: true,
+        }
+    }
+}
+impl From<&str> for TransferFailure {
+    fn from(message: &str) -> Self {
+        Self {
+            message: message.into(),
+            retryable: false,
+        }
+    }
+}
 async fn transfer_file(
     client: &reqwest::Client,
     store: &SharedStore,
@@ -70,6 +93,50 @@ async fn transfer_file(
     url: &str,
     high_quality: bool,
 ) -> Result<Transfer, String> {
+    for attempt in 0..3 {
+        if *work.control.borrow() != 0 {
+            return Err("任务已停止".into());
+        }
+        match transfer_once(
+            client,
+            store,
+            work,
+            asset,
+            index,
+            completed,
+            notify,
+            url,
+            high_quality,
+        )
+        .await
+        {
+            Ok(transfer) => return Ok(transfer),
+            Err(error) if error.retryable && attempt < 2 => {
+                store.lock().unwrap().state(
+                    &work.id,
+                    "running",
+                    &format!("网络异常，正在第 {}/2 次重试", attempt + 1),
+                );
+                notify();
+                tokio::select! {biased;_=work.control.changed()=>return Err("任务已停止".into()),_=tokio::time::sleep(Duration::from_millis(if attempt==0{500}else{1500}))=>{}}
+            }
+            Err(error) => return Err(error.message),
+        }
+    }
+    unreachable!()
+}
+
+async fn transfer_once(
+    client: &reqwest::Client,
+    store: &SharedStore,
+    work: &mut Work,
+    asset: &Asset,
+    index: usize,
+    completed: u64,
+    notify: &impl Fn(),
+    url: &str,
+    high_quality: bool,
+) -> Result<Transfer, TransferFailure> {
     let part = work.options.temp_folder.join(format!(
         "{:03}{}.part",
         index + 1,
@@ -79,6 +146,13 @@ async fn transfer_file(
         .await
         .map(|m| m.len())
         .unwrap_or(0);
+    let remembered = store
+        .lock()
+        .unwrap()
+        .partial_source(&work.id, index, high_quality);
+    if remembered.as_ref().is_some_and(|(source, _)| source != url) {
+        offset = 0;
+    }
     let mut response = None;
     for attempt in 0..2 {
         let mut request = client
@@ -86,14 +160,33 @@ async fn transfer_file(
             .header("Referer", "https://www.xiaohongshu.com/");
         if offset > 0 {
             request = request.header("Range", format!("bytes={offset}-"));
+            if let Some((source, etag)) = &remembered {
+                if source == url && !etag.is_empty() && !etag.starts_with("W/") {
+                    request = request.header("If-Range", etag);
+                }
+            }
         }
         let r = tokio::select! { biased;
             _=work.control.changed()=>return Err("任务已停止".into()),
-            r=request.send()=>r.map_err(|_|"网络连接失败或超时，请重试")?,
+            r=request.send()=>r.map_err(|_|TransferFailure::retry("网络连接失败或超时，请重试"))?,
         };
         if r.status().as_u16() == 416 && attempt == 0 {
             offset = 0;
             continue;
+        }
+        if offset > 0 && r.status().as_u16() == 206 && attempt == 0 {
+            if let Some((source, etag)) = &remembered {
+                if source == url
+                    && !etag.is_empty()
+                    && r.headers()
+                        .get("etag")
+                        .and_then(|v| v.to_str().ok())
+                        .is_some_and(|new| new != etag)
+                {
+                    offset = 0;
+                    continue;
+                }
+            }
         }
         response = Some(r);
         break;
@@ -101,13 +194,16 @@ async fn transfer_file(
     let mut response = response.ok_or("服务器未返回文件")?;
     let code = response.status().as_u16();
     if !response.status().is_success() {
-        return Err(match code {
+        let message = match code {
             401 | 403 => "媒体地址不可访问，请重新打开笔记再下载",
             404 | 410 => "媒体链接已失效，请重新打开笔记",
             429 => "请求过于频繁，请稍后再试",
             _ => "媒体服务器返回错误，请重试",
-        }
-        .into());
+        };
+        return Err(TransferFailure {
+            message: message.into(),
+            retryable: matches!(code, 500 | 502 | 503 | 504),
+        });
     }
     if code == 200 {
         offset = 0
@@ -135,6 +231,19 @@ async fn transfer_file(
         return Err("媒体服务器返回了网页内容，请重新打开笔记".into());
     }
     let total = response.content_length().map(|n| n + offset);
+    let mut etag = response
+        .headers()
+        .get("etag")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_owned();
+    if offset > 0 && etag.is_empty() {
+        if let Some((source, previous)) = &remembered {
+            if source == url {
+                etag = previous.clone();
+            }
+        }
+    }
     let mut file = tokio::fs::OpenOptions::new()
         .create(true)
         .write(true)
@@ -143,17 +252,49 @@ async fn transfer_file(
         .open(&part)
         .await
         .map_err(|_| "无法写入临时文件")?;
+    store
+        .lock()
+        .unwrap()
+        .set_partial_source(&work.id, index, high_quality, url, &etag)
+        .map_err(|message| TransferFailure {
+            message,
+            retryable: false,
+        })?;
+    let mut hasher = Sha256::new();
+    if offset > 0 {
+        let mut prefix = tokio::fs::File::open(&part)
+            .await
+            .map_err(|_| "无法读取续传文件")?;
+        let mut remaining = offset;
+        let mut buffer = [0u8; 65536];
+        while remaining > 0 {
+            if *work.control.borrow() != 0 {
+                return Err("任务已停止".into());
+            }
+            let limit = (remaining as usize).min(buffer.len());
+            let n = prefix
+                .read(&mut buffer[..limit])
+                .await
+                .map_err(|_| "无法读取续传文件")?;
+            if n == 0 {
+                return Err("续传文件长度变化".into());
+            }
+            hasher.update(&buffer[..n]);
+            remaining -= n as u64;
+        }
+    }
     let mut bytes = offset;
     let mut tick = Instant::now();
     loop {
         let chunk = tokio::select! {biased;
             _=work.control.changed()=>{file.flush().await.map_err(|_|"保存下载进度失败")?;return Err("任务已停止".into())},
-            c=response.chunk()=>c.map_err(|_|"下载连接中断，临时文件已保留，可重试")?,
+            c=response.chunk()=>match c{Ok(chunk)=>chunk,Err(_)=>{file.flush().await.map_err(|_|"保存下载进度失败")?;return Err(TransferFailure::retry("下载连接中断，临时文件已保留，可重试"));}},
         };
         let Some(chunk) = chunk else { break };
         file.write_all(&chunk)
             .await
             .map_err(|_| "写入失败，请检查磁盘空间与目录权限")?;
+        hasher.update(&chunk);
         bytes += chunk.len() as u64;
         if tick.elapsed() >= Duration::from_millis(300) {
             store.lock().unwrap().progress(
@@ -202,6 +343,7 @@ async fn transfer_file(
         ext,
         width,
         height,
+        sha256: format!("{:x}", hasher.finalize()),
     })
 }
 
@@ -224,6 +366,13 @@ async fn run(
     }
     let mut report = store.lock().unwrap().saved_files(&work.id)?;
     let mut completed = 0;
+    let mut reused = 0;
+    let archive = if work.options.force {
+        None
+    } else {
+        let loaded = { crate::library::Archive::load(&store.lock().unwrap(), &work.note.id)? };
+        Some(loaded.indexed())
+    };
     for (index, asset) in work.note.assets.clone().iter().enumerate() {
         if *work.control.borrow() != 0 {
             return Err("任务已停止".into());
@@ -235,9 +384,7 @@ async fn run(
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
                 Err(_) => return Err("原文件暂时无法访问，请检查磁盘或目录权限后重试".into()),
             };
-            if path.parent() == Some(work.folder.as_path())
-                && metadata.is_some_and(|m| m.is_file() && m.len() == size && size > 0)
-            {
+            if metadata.is_some_and(|m| m.is_file() && m.len() == size && size > 0) {
                 if !report
                     .iter()
                     .any(|record| record.index == index && !record.format.is_empty())
@@ -272,6 +419,7 @@ async fn run(
                             .to_string_lossy()
                             .into(),
                         source: "legacy".into(),
+                        sha256: String::new(),
                     };
                     store
                         .lock()
@@ -283,6 +431,29 @@ async fn run(
                 completed += size;
                 continue;
             }
+        }
+        if let Some(existing) = archive.as_ref().and_then(|a| a.reusable(asset)) {
+            let mut record = existing.record;
+            record.index = index;
+            record.sequence = if asset.sequence > 0 {
+                asset.sequence
+            } else {
+                index + 1
+            };
+            completed += record.bytes;
+            store
+                .lock()
+                .unwrap()
+                .file_done(&work.id, index, &existing.path, &record)?;
+            report.retain(|r| r.index != index);
+            report.push(record);
+            reused += 1;
+            store
+                .lock()
+                .unwrap()
+                .progress(&work.id, completed, completed);
+            notify();
+            continue;
         }
         store.lock().unwrap().state(
             &work.id,
@@ -372,6 +543,7 @@ async fn run(
             height: transfer.height,
             format: transfer.ext.into(),
             source: source.into(),
+            sha256: transfer.sha256,
         };
         store
             .lock()
@@ -409,6 +581,9 @@ async fn run(
         work.note.assets.len(),
         completed as f64 / 1048576.0
     );
+    if reused > 0 {
+        summary.push_str(&format!(" · 跳过已有 {reused} 项（保留原位置）"));
+    }
     if live > 0 {
         summary.push_str(&format!(" · {live} 个 LIVE 片段"));
     }
@@ -463,6 +638,300 @@ mod tests {
     fn tiny_png() -> Vec<u8> {
         [b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR\x00\x00\x00\x02\x00\x00\x00\x03\x08\x06\x00\x00\x00".as_slice(),&[0;48]].concat()
     }
+    #[test]
+    fn duplicate_is_reused_across_jobs_unless_force_is_set_and_hash_is_recorded() {
+        let root = std::env::temp_dir().join(format!("stilldock-dedupe-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let store = Arc::new(Mutex::new(Store::open(&root.join("jobs.db")).unwrap()));
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let client = reqwest::Client::new();
+        let (url, thread) = server(tiny_png(), false);
+        let mut note = Note {
+            id: "abcdef0123456789abcdef05".into(),
+            assets: vec![Asset {
+                url: "https://sns-img-bd.xhscdn.com/dedup-image".into(),
+                original_url: url,
+                sequence: 3,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let run_job = |force: bool, folder: &std::path::Path, note: &Note| {
+            let id = store
+                .lock()
+                .unwrap()
+                .add_with_policy(note, folder, force)
+                .unwrap();
+            let (_, folder, _) = store.lock().unwrap().payload(&id).unwrap();
+            let options = store.lock().unwrap().download_options(&id).unwrap();
+            let (_signal, rx) = watch::channel(0);
+            let mut work = Work {
+                id: id.clone(),
+                note: note.clone(),
+                folder,
+                options,
+                control: rx,
+            };
+            let message = rt
+                .block_on(run(&client, &store, &mut work, &|| {}))
+                .unwrap();
+            store.lock().unwrap().state(&id, "done", &message);
+            (id, message)
+        };
+        let (first, _) = run_job(false, &root, &note);
+        thread.join().unwrap();
+        let original = store.lock().unwrap().file(&first, 0).unwrap().0;
+        let mut wrong = note.assets[0].clone();
+        wrong.url = "https://sns-img-bd.xhscdn.com/different-image".into();
+        let archive =
+            { crate::library::Archive::load(&store.lock().unwrap(), &note.id).unwrap() }.indexed();
+        assert!(archive.reusable(&wrong).is_none());
+        let hash = store.lock().unwrap().saved_files(&first).unwrap()[0]
+            .sha256
+            .clone();
+        assert_eq!(hash, format!("{:x}", Sha256::digest(tiny_png())));
+        let (second, message) = run_job(false, &root.join("new-root"), &note);
+        assert!(message.contains("跳过已有 1 项"));
+        assert_eq!(store.lock().unwrap().file(&second, 0).unwrap().0, original);
+        let (url, thread) = server(tiny_png(), false);
+        note.assets[0].original_url = url;
+        let (forced, _) = run_job(true, &root, &note);
+        thread.join().unwrap();
+        let other = store.lock().unwrap().file(&forced, 0).unwrap().0;
+        assert_ne!(other, original);
+        assert_eq!(std::fs::read(&original).unwrap(), tiny_png());
+        let snapshot = crate::library::inspect(&store, &note);
+        assert_eq!(snapshot.assets[0].state, "present");
+        std::fs::remove_file(&original).unwrap();
+        assert_eq!(
+            crate::library::inspect(&store, &note).assets[0].state,
+            "present"
+        );
+        std::fs::remove_file(other).unwrap();
+        assert_eq!(
+            crate::library::inspect(&store, &note).assets[0].state,
+            "missing"
+        );
+        drop(store);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn interrupted_body_retries_with_range_and_hashes_the_complete_file() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/image", listener.local_addr().unwrap());
+        let data = tiny_png();
+        let expected = data.clone();
+        let split = data.len() / 2;
+        let thread = std::thread::spawn(move || {
+            for attempt in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0; 4096];
+                let n = stream.read(&mut request).unwrap();
+                let header = String::from_utf8_lossy(&request[..n]);
+                if attempt == 0 {
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nETag: version-one\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        data.len()
+                    )
+                    .unwrap();
+                    stream.write_all(&data[..split]).unwrap();
+                } else {
+                    assert!(header
+                        .to_ascii_lowercase()
+                        .contains(&format!("range: bytes={split}-")));
+                    assert!(header
+                        .to_ascii_lowercase()
+                        .contains("if-range: version-one"));
+                    write!(stream,"HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {}-{}/{}\r\nConnection: close\r\n\r\n",data.len()-split,split,data.len()-1,data.len()).unwrap();
+                    stream.write_all(&data[split..]).unwrap();
+                }
+            }
+        });
+        let root = std::env::temp_dir().join(format!("stilldock-retry-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let store = Arc::new(Mutex::new(Store::open(&root.join("jobs.db")).unwrap()));
+        let note = Note {
+            id: "abcdef0123456789abcdef06".into(),
+            assets: vec![Asset {
+                url,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let id = store.lock().unwrap().add(&note, &root).unwrap();
+        let (_, folder, _) = store.lock().unwrap().payload(&id).unwrap();
+        let options = store.lock().unwrap().download_options(&id).unwrap();
+        let (_signal, rx) = watch::channel(0);
+        let mut work = Work {
+            id: id.clone(),
+            note,
+            folder,
+            options,
+            control: rx,
+        };
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(run(&reqwest::Client::new(), &store, &mut work, &|| {}))
+            .unwrap();
+        thread.join().unwrap();
+        let record = store.lock().unwrap().saved_files(&id).unwrap().remove(0);
+        assert_eq!(record.sha256, format!("{:x}", Sha256::digest(&expected)));
+        assert_eq!(
+            std::fs::read(store.lock().unwrap().file(&id, 0).unwrap().0).unwrap(),
+            expected
+        );
+        drop(store);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn server_retries_are_bounded_and_pause_interrupts_backoff_without_retrying_429() {
+        fn response(status: u16) -> (String, std::thread::JoinHandle<()>) {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/image", listener.local_addr().unwrap());
+            let thread = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buf = [0; 4096];
+                let _ = stream.read(&mut buf);
+                write!(
+                    stream,
+                    "HTTP/1.1 {status} Failure\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+                .unwrap();
+            });
+            (url, thread)
+        }
+        let root = std::env::temp_dir().join(format!("stilldock-backoff-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let store = Arc::new(Mutex::new(Store::open(&root.join("jobs.db")).unwrap()));
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        for status in [429u16, 503] {
+            let (url, thread) = response(status);
+            let note = Note {
+                id: format!("abcdef0123456789abcd{status:04}"),
+                assets: vec![Asset {
+                    url,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            let id = store.lock().unwrap().add(&note, &root).unwrap();
+            let (_, folder, _) = store.lock().unwrap().payload(&id).unwrap();
+            let options = store.lock().unwrap().download_options(&id).unwrap();
+            let (signal, rx) = watch::channel(0);
+            let mut work = Work {
+                id: id.clone(),
+                note,
+                folder,
+                options,
+                control: rx,
+            };
+            let result = rt.block_on(async {
+                if status == 503 {
+                    tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_millis(75)).await;
+                        let _ = signal.send(1);
+                    });
+                }
+                run(&reqwest::Client::new(), &store, &mut work, &|| {}).await
+            });
+            thread.join().unwrap();
+            let error = result.unwrap_err();
+            if status == 429 {
+                assert!(error.contains("请求过于频繁"));
+            } else {
+                assert_eq!(error, "任务已停止");
+            }
+        }
+        drop(store);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn changed_source_never_appends_to_the_previous_source_partial() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/new", listener.local_addr().unwrap());
+        let data = tiny_png();
+        let thread = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = [0; 4096];
+            let n = stream.read(&mut buffer).unwrap();
+            assert!(!String::from_utf8_lossy(&buffer[..n])
+                .to_ascii_lowercase()
+                .contains("range:"));
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                data.len()
+            )
+            .unwrap();
+            stream.write_all(&data).unwrap();
+        });
+        let root =
+            std::env::temp_dir().join(format!("stilldock-source-part-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let store = Arc::new(Mutex::new(Store::open(&root.join("jobs.db")).unwrap()));
+        let note = Note {
+            id: "abcdef0123456789abcdef07".into(),
+            assets: vec![Asset {
+                url,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let id = store.lock().unwrap().add(&note, &root).unwrap();
+        let (_, folder, _) = store.lock().unwrap().payload(&id).unwrap();
+        let options = store.lock().unwrap().download_options(&id).unwrap();
+        std::fs::create_dir_all(&options.temp_folder).unwrap();
+        std::fs::write(
+            options.temp_folder.join("001.part"),
+            b"old bytes must never be appended",
+        )
+        .unwrap();
+        store
+            .lock()
+            .unwrap()
+            .set_partial_source(
+                &id,
+                0,
+                false,
+                "https://sns-img-bd.xhscdn.com/previous",
+                "old-etag",
+            )
+            .unwrap();
+        let (_signal, rx) = watch::channel(0);
+        let mut work = Work {
+            id: id.clone(),
+            note,
+            folder,
+            options,
+            control: rx,
+        };
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(run(&reqwest::Client::new(), &store, &mut work, &|| {}))
+            .unwrap();
+        thread.join().unwrap();
+        assert_eq!(
+            std::fs::read(store.lock().unwrap().file(&id, 0).unwrap().0).unwrap(),
+            tiny_png()
+        );
+        drop(store);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn flat_output_uses_sqlite_and_exports_only_when_enabled() {
         let root = std::env::temp_dir().join(format!("stilldock-flat-test-{}", std::process::id()));
@@ -610,6 +1079,7 @@ mod tests {
                         height: 3,
                         format: "png".into(),
                         source: "high_resolution".into(),
+                        sha256: String::new(),
                     },
                 )
                 .unwrap();

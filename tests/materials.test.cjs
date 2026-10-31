@@ -26,7 +26,7 @@ function boot(total=120){
   const mask=node();mask.className='note-detail-mask';const native=node();native.id='noteContainer';const video=node('video');video.paused=false;video.pause=()=>video.paused=true;native.append(video);mask.append(native);document.body.append(mask);
   let note={id:'abcdef0123456789abcdef01',title:'<script>plain text</script>',author:'author',url:'https://www.xiaohongshu.com/explore/abcdef0123456789abcdef01',assets:Array.from({length:total},(_,i)=>({url:'https://sns-img-bd.xhscdn.com/full'+i,preview:'https://sns-img-bd.xhscdn.com/thumb'+i,original_url:'https://ci.xiaohongshu.com/hq'+i,sequence:i+1,live_url:i===0?'https://sns-video-bd.xhscdn.com/live':''}))};
   const window={ipc:{postMessage:raw=>sent.push(JSON.parse(raw))},__xhsReadNote:()=>note};window.top=window;
-  const context={window,document,getComputedStyle:()=>({display:'block',visibility:'visible'}),location:new URL(note.url),requestAnimationFrame:fn=>{const id=++serial;frames.set(id,fn);return id;},cancelAnimationFrame:id=>frames.delete(id),setTimeout:fn=>{const id=++serial;timers.set(id,fn);return id;},clearTimeout:id=>timers.delete(id),MutationObserver:function(){this.observe=()=>{};},IntersectionObserver:function(fn){this.targets=new Set();this.observe=t=>this.targets.add(t);this.unobserve=t=>this.targets.delete(t);this.disconnect=()=>this.targets.clear();this.deliver=()=>fn([...this.targets].map(target=>({target,isIntersecting:true})));images.push(this);},ResizeObserver:function(fn){this.observe=()=>{};this.disconnect=()=>this.disconnected=true;this.fire=fn;resizes.push(this);},addEventListener:(k,fn)=>{(listeners[k]||=[]).push(fn);}};
+  const context={window,document,URL,getComputedStyle:()=>({display:'block',visibility:'visible'}),location:new URL(note.url),requestAnimationFrame:fn=>{const id=++serial;frames.set(id,fn);return id;},cancelAnimationFrame:id=>frames.delete(id),setTimeout:fn=>{const id=++serial;timers.set(id,fn);return id;},clearTimeout:id=>timers.delete(id),MutationObserver:function(){this.observe=()=>{};},IntersectionObserver:function(fn){this.targets=new Set();this.observe=t=>this.targets.add(t);this.unobserve=t=>this.targets.delete(t);this.disconnect=()=>this.targets.clear();this.deliver=()=>fn([...this.targets].map(target=>({target,isIntersecting:true})));images.push(this);},ResizeObserver:function(fn){this.observe=()=>{};this.disconnect=()=>this.disconnected=true;this.fire=fn;resizes.push(this);},addEventListener:(k,fn)=>{(listeners[k]||=[]).push(fn);}};
   vm.runInNewContext(source,context);
   return {window,document,native,mask,video,sent,images,resizes,listeners,get note(){return note;},set note(value){note=value;},get api(){return window.__stillDockMaterial;},get host(){return document.body.children.find(n=>n.id==='stilldock-material');},find(s){return this.host?.shadowRoot.querySelectorAll(s)||[];},button(text){return this.find('button').find(n=>n.textContent===text);},flush(){for(const [id,fn] of [...frames]){frames.delete(id);fn();}},all};
 }
@@ -82,4 +82,20 @@ test('grid gestures resolve the card under the pointer and never guess from empt
 test('login or verification dialogs take precedence over the material workspace',()=>{
   const p=boot(4);const dialog={closest:()=>null,getClientRects:()=>[{}]};p.document.querySelectorAll=()=>[dialog];p.api.update(p.note);assert.equal(p.api.isOpen(),false);assert.equal(p.mask.inert,false);
   p.document.querySelectorAll=()=>[];p.api.update(p.note);assert.equal(p.api.isOpen(),true);
+});
+
+test('per-card state filtering never changes original indices and LIVE missing can be selected',()=>{
+  const p=boot(4);p.api.setStates({note_id:p.note.id,expected_urls:p.note.assets.map(a=>a.url),assets:[{index:0,state:'present',live_state:'new'},{index:1,state:'missing'},{index:2,state:'queued'},{index:3,state:'unavailable'}]});
+  assert.deepEqual(p.find('.file-state').map(n=>n.textContent),['本地存在','文件缺失','已排队','暂时无法访问']);
+  p.find('.open')[0].click();assert.deepEqual(p.sent.at(-1),{kind:'material_open',index:0});
+  const filter=p.find('select')[0];filter.value='needed';filter.onchange();assert.deepEqual(p.find('.card').map(n=>Number(n.dataset.index)),[1]);
+  p.button('下载选中 1 张').click();assert.deepEqual(p.sent.at(-1).indices,[1]);p.api.result(true,'queued');
+  p.api.setConfig({includeLive:true});p.button('选中缺失项').click();assert.deepEqual(p.sent.at(-1).indices,[0,1]);p.button('轮播视图').click();p.document.body.children.find(n=>n.id==='stilldock-material-launcher').click();assert.deepEqual(p.find('.card').map(n=>Number(n.dataset.index)),[0,1]);
+});
+test('source signature refresh preserves selected images and rejects stale status responses',()=>{
+  const p=boot(3);p.button('清空').click();p.find('.media')[1].click();const old=p.note.assets.map(a=>a.url);
+  p.note={...p.note,assets:p.note.assets.map(a=>({...a,url:a.url+'?sig=new'}))};p.api.update(p.note);
+  assert.equal(p.find('.count')[0].textContent,'已选 1 / 3');assert.equal(p.find('.card')[1].children[1].children[0].children[0].checked,true);
+  p.api.setStates({note_id:p.note.id,expected_urls:old,assets:[{index:0,state:'present'}]});assert.equal(p.find('.file-state')[0].textContent,'核对中…');
+  const force=p.find('.live-option').find(label=>label.children.some(n=>n.textContent==='重新下载已有图')).children[0];force.checked=true;p.button('下载选中 1 张').click();assert.equal(p.sent.at(-1).force,true);assert.deepEqual(p.sent.at(-1).indices,[1]);
 });

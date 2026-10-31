@@ -72,3 +72,11 @@ Repair reuses the existing job and fixed storage options. The transfer loop rech
 `materials.js` mounts a disposable Shadow DOM workspace inside the existing site WebView. It reads the same note bridge and preserves asset indices/sequences. Row virtualization retains nearby cards only; IntersectionObserver loads previews, ResizeObserver updates columns, and close/leave tears down observers, animation work and image sources. Native detail is hidden/inert, video play events are paused, and native closing is restored before returning.
 
 Selection is shared through `material_selection`/panel `selection` IPC and snapshots without echo. `material_download` is revalidated with `select_current_assets` against the current note and source list before joining the existing queue. Feedback is scoped to the captured note ID. Settings persist default grid and LIVE behavior in SQLite. Video/unknown posts fail open to native content; the original page DOM is retained for search position preservation.
+
+## Same-note availability and reuse
+
+`library.rs` snapshots bounded same-note history (200 jobs, 4000 records), indexes normalized platform media identities, then inspects recorded paths off the UI thread. A latest-request slot plus a bounded wake channel coalesces card checks. Task state/file-count changes trigger updates; byte progress alone does not. Paths remain native-only, while cards receive state and source-list guards. Reused files are referenced at their actual locations, never copied/deleted automatically.
+
+Jobs freeze `force` policy. Transfers reuse intact history unless forced, while own complete records remain resumable in either policy. File rows additionally record SHA-256. A typed transfer error restricts bounded retry to network/body and selected 5xx errors, with cancellation-aware backoff. Hashing includes a streamed existing prefix for Range resume. Source refresh matches normalized media and original numbering; it neither starts jobs nor substitutes edited images.
+
+`partial_sources` stores source URL and ETag per job/index/quality candidate. A changed source restarts the candidate rather than mixing bytes; known ETags supply If-Range. The source marker is updated only after opening/truncating the partial succeeds. Refreshing a payload remembers the previous source before replacing signed URLs.

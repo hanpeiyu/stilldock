@@ -25,6 +25,7 @@ pub struct DownloadOptions {
     pub layout: String,
     pub temp_folder: PathBuf,
     pub export_json: bool,
+    pub force: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -39,6 +40,7 @@ pub struct SavedFile {
     pub height: usize,
     pub format: String,
     pub source: String,
+    pub sha256: String,
 }
 
 pub struct Store {
@@ -51,6 +53,7 @@ impl Store {
         CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY,note_id TEXT,title TEXT,author TEXT,state TEXT,message TEXT,folder TEXT,payload TEXT,done INTEGER DEFAULT 0,total INTEGER DEFAULT 0,created INTEGER);
         CREATE TABLE IF NOT EXISTS files(job_id TEXT,idx INTEGER,path TEXT,size INTEGER,PRIMARY KEY(job_id,idx));
         CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT);
+        CREATE TABLE IF NOT EXISTS partial_sources(job_id TEXT,idx INTEGER,hq INTEGER,url TEXT,etag TEXT,PRIMARY KEY(job_id,idx,hq));
         UPDATE jobs SET state='paused',message='上次未完成，可继续下载' WHERE state IN ('pending','running','pausing');
         UPDATE jobs SET state='cancelled' WHERE state='cancelling';")?;
         let migration = db.unchecked_transaction()?;
@@ -61,6 +64,7 @@ impl Store {
                     ("layout", "TEXT NOT NULL DEFAULT 'legacy'"),
                     ("temp_folder", "TEXT NOT NULL DEFAULT ''"),
                     ("export_json", "INTEGER NOT NULL DEFAULT 0"),
+                    ("force", "INTEGER NOT NULL DEFAULT 0"),
                 ],
             ),
             (
@@ -73,6 +77,7 @@ impl Store {
                     ("sequence", "INTEGER NOT NULL DEFAULT 0"),
                     ("live", "INTEGER NOT NULL DEFAULT 0"),
                     ("video", "INTEGER NOT NULL DEFAULT 0"),
+                    ("sha256", "TEXT NOT NULL DEFAULT ''"),
                 ],
             ),
         ] {
@@ -132,6 +137,9 @@ impl Store {
         Ok(())
     }
     pub fn add(&self, note: &Note, root: &Path) -> Result<String, String> {
+        self.add_with_policy(note, root, false)
+    }
+    pub fn add_with_policy(&self, note: &Note, root: &Path, force: bool) -> Result<String, String> {
         self.ensure_available(note, "")?;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -157,7 +165,7 @@ impl Store {
         };
         let temp_folder = folder.join(".stilldock-cache").join(&id);
         let export_json = self.setting("export_json", "false") == "true";
-        self.db.execute("INSERT INTO jobs(id,note_id,title,author,state,message,folder,payload,created,layout,temp_folder,export_json) VALUES (?,?,?,?,'pending','等待下载',?,?,?,?,?,?)",params![id,note.id,note.title,note.author,folder.to_string_lossy(),serde_json::to_string(note).map_err(|e|e.to_string())?,now as i64,layout,temp_folder.to_string_lossy(),export_json]).map_err(|e|e.to_string())?;
+        self.db.execute("INSERT INTO jobs(id,note_id,title,author,state,message,folder,payload,created,layout,temp_folder,export_json,force) VALUES (?,?,?,?,'pending','等待下载',?,?,?,?,?,?,?)",params![id,note.id,note.title,note.author,folder.to_string_lossy(),serde_json::to_string(note).map_err(|e|e.to_string())?,now as i64,layout,temp_folder.to_string_lossy(),export_json,force]).map_err(|e|e.to_string())?;
         Ok(id)
     }
     pub fn jobs(&self) -> rusqlite::Result<Vec<Job>> {
@@ -223,7 +231,7 @@ impl Store {
         let options = self
             .db
             .query_row(
-                "SELECT layout,temp_folder,export_json,folder FROM jobs WHERE id=?",
+                "SELECT layout,temp_folder,export_json,folder,force FROM jobs WHERE id=?",
                 [id],
                 |row| {
                     let temporary: String = row.get(1)?;
@@ -235,6 +243,7 @@ impl Store {
                             temporary
                         }),
                         export_json: row.get(2)?,
+                        force: row.get(4)?,
                     })
                 },
             )
@@ -248,26 +257,37 @@ impl Store {
         Ok(options)
     }
     pub fn saved_files(&self, id: &str) -> Result<Vec<SavedFile>, String> {
-        let mut query=self.db.prepare("SELECT idx,sequence,live,video,path,size,width,height,format,source FROM files WHERE job_id=? ORDER BY idx").map_err(|e|e.to_string())?;
+        Ok(self
+            .file_records(id)?
+            .into_iter()
+            .map(|(_, record)| record)
+            .collect())
+    }
+    pub fn file_records(&self, id: &str) -> Result<Vec<(PathBuf, SavedFile)>, String> {
+        let mut query=self.db.prepare("SELECT idx,sequence,live,video,path,size,width,height,format,source,sha256 FROM files WHERE job_id=? ORDER BY idx").map_err(|e|e.to_string())?;
         let rows = query
             .query_map([id], |row| {
                 let path: String = row.get(4)?;
-                Ok(SavedFile {
-                    index: row.get::<_, i64>(0)? as usize,
-                    sequence: row.get::<_, i64>(1)? as usize,
-                    live: row.get(2)?,
-                    video: row.get(3)?,
-                    filename: Path::new(&path)
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into(),
-                    bytes: row.get::<_, i64>(5)? as u64,
-                    width: row.get::<_, i64>(6)? as usize,
-                    height: row.get::<_, i64>(7)? as usize,
-                    format: row.get(8)?,
-                    source: row.get(9)?,
-                })
+                Ok((
+                    PathBuf::from(&path),
+                    SavedFile {
+                        index: row.get::<_, i64>(0)? as usize,
+                        sequence: row.get::<_, i64>(1)? as usize,
+                        live: row.get(2)?,
+                        video: row.get(3)?,
+                        filename: Path::new(&path)
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into(),
+                        bytes: row.get::<_, i64>(5)? as u64,
+                        width: row.get::<_, i64>(6)? as usize,
+                        height: row.get::<_, i64>(7)? as usize,
+                        format: row.get(8)?,
+                        source: row.get(9)?,
+                        sha256: row.get(10)?,
+                    },
+                ))
             })
             .map_err(|e| e.to_string())?;
         rows.collect::<Result<Vec<_>, _>>()
@@ -280,8 +300,117 @@ impl Store {
         path: &Path,
         record: &SavedFile,
     ) -> Result<(), String> {
-        self.db.execute("INSERT OR REPLACE INTO files(job_id,idx,path,size,width,height,format,source,sequence,live,video) VALUES(?,?,?,?,?,?,?,?,?,?,?)",params![id,index as i64,path.to_string_lossy(),record.bytes as i64,record.width as i64,record.height as i64,record.format,record.source,record.sequence as i64,record.live,record.video]).map_err(|_|"无法记录下载信息，请检查数据目录空间")?;
+        self.db.execute("INSERT OR REPLACE INTO files(job_id,idx,path,size,width,height,format,source,sequence,live,video,sha256) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",params![id,index as i64,path.to_string_lossy(),record.bytes as i64,record.width as i64,record.height as i64,record.format,record.source,record.sequence as i64,record.live,record.video,record.sha256]).map_err(|_|"无法记录下载信息，请检查数据目录空间")?;
         Ok(())
+    }
+    pub fn partial_source(&self, id: &str, index: usize, hq: bool) -> Option<(String, String)> {
+        self.db
+            .query_row(
+                "SELECT url,etag FROM partial_sources WHERE job_id=? AND idx=? AND hq=?",
+                params![id, index as i64, hq],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .ok()
+    }
+    pub fn set_partial_source(
+        &self,
+        id: &str,
+        index: usize,
+        hq: bool,
+        url: &str,
+        etag: &str,
+    ) -> Result<(), String> {
+        self.db
+            .execute(
+                "INSERT OR REPLACE INTO partial_sources VALUES(?,?,?,?,?)",
+                params![id, index as i64, hq, url, etag],
+            )
+            .map(|_| ())
+            .map_err(|_| "无法记录续传来源".into())
+    }
+    pub fn note_history(&self, note_id: &str) -> Result<Vec<(String, String, Note)>, String> {
+        let mut q = self
+            .db
+            .prepare(
+                "SELECT id,state,payload FROM jobs WHERE note_id=? ORDER BY created DESC LIMIT 200",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = q
+            .query_map([note_id], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        rows.map(|r| {
+            let (id, state, payload) = r.map_err(|e| e.to_string())?;
+            let note = serde_json::from_str(&payload).map_err(|e| e.to_string())?;
+            Ok((id, state, note))
+        })
+        .collect()
+    }
+    pub fn refresh_sources(&self, current: &Note) -> Result<usize, String> {
+        if !crate::model::valid_note(current) {
+            return Ok(0);
+        }
+        let mut fresh = current.clone();
+        crate::model::select_assets(&mut fresh, None, true);
+        let mut fresh_index: std::collections::HashMap<String, Vec<&crate::model::Asset>> =
+            std::collections::HashMap::new();
+        for asset in &fresh.assets {
+            for key in crate::model::media_keys(asset) {
+                fresh_index.entry(key).or_default().push(asset);
+            }
+        }
+        let mut refreshed = 0;
+        for (id, state, mut old) in self.note_history(&current.id)? {
+            if !["paused", "failed", "done"].contains(&state.as_str()) {
+                continue;
+            }
+            let replacements: Option<Vec<_>> = old
+                .assets
+                .iter()
+                .map(|asset| {
+                    crate::model::media_keys(asset).iter().find_map(|key| {
+                        fresh_index.get(key).and_then(|candidates| {
+                            candidates
+                                .iter()
+                                .find(|new| {
+                                    asset.sequence == 0
+                                        || new.sequence == 0
+                                        || asset.sequence == new.sequence
+                                })
+                                .map(|new| (*new).clone())
+                        })
+                    })
+                })
+                .collect();
+            if let Some(assets) = replacements {
+                if old.assets.iter().zip(&assets).all(|(a, b)| {
+                    a.url == b.url && a.original_url == b.original_url && a.live_url == b.live_url
+                }) {
+                    continue;
+                }
+                for (index, asset) in old.assets.iter().enumerate() {
+                    let hq = !asset.video
+                        && !asset.original_url.is_empty()
+                        && asset.original_url != asset.url;
+                    let url = if hq { &asset.original_url } else { &asset.url };
+                    self.db
+                        .execute(
+                            "INSERT OR IGNORE INTO partial_sources VALUES(?,?,?,?, '')",
+                            params![id, index as i64, hq, url],
+                        )
+                        .map_err(|e| e.to_string())?;
+                }
+                old.assets = assets;
+                self.db.execute("UPDATE jobs SET payload=?,message=CASE WHEN state='done' THEN message ELSE '媒体地址已刷新，选图保留，可继续下载' END WHERE id=? AND state IN ('paused','failed','done')",params![serde_json::to_string(&old).map_err(|e|e.to_string())?,id]).map_err(|e|e.to_string())?;
+                refreshed += 1;
+            }
+        }
+        Ok(refreshed)
     }
     pub fn local_targets(&self, note_id: &str) -> Result<Vec<crate::local_files::Target>, String> {
         let mut query = self.db.prepare("SELECT id,folder,payload FROM jobs WHERE state='done' AND (?='' OR note_id=?) ORDER BY created DESC LIMIT 200").map_err(|e|e.to_string())?;
@@ -415,6 +544,56 @@ mod tests {
         assert_eq!(again.download_options("old").unwrap().temp_folder, root);
         drop(again);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn refreshed_sources_keep_partial_selection_live_pair_and_task_options() {
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        let mut current = Note {
+            id: "abcdef0123456789abcdef01".into(),
+            url: "https://www.xiaohongshu.com/explore/abcdef0123456789abcdef01".into(),
+            assets: vec![
+                crate::model::Asset {
+                    url: "https://sns-img-bd.xhscdn.com/first?sig=old".into(),
+                    sequence: 1,
+                    ..Default::default()
+                },
+                crate::model::Asset {
+                    url: "https://sns-img-bd.xhscdn.com/second?sig=old".into(),
+                    live_url: "https://sns-video-bd.xhscdn.com/live?sig=old".into(),
+                    sequence: 4,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let mut chosen = current.clone();
+        crate::model::select_assets(&mut chosen, Some(&[1]), true);
+        let id = store
+            .add_with_policy(&chosen, Path::new("D:/Downloads"), true)
+            .unwrap();
+        store.state(&id, "failed", "expired");
+        current.assets[0].url = current.assets[0].url.replace("old", "new");
+        current.assets[1].url = current.assets[1].url.replace("old", "new");
+        current.assets[1].live_url = current.assets[1].live_url.replace("old", "new");
+        assert_eq!(store.refresh_sources(&current).unwrap(), 1);
+        let (saved, folder, state) = store.payload(&id).unwrap();
+        assert_eq!(saved.assets.len(), 2);
+        assert!(saved
+            .assets
+            .iter()
+            .all(|a| a.sequence == 4 && a.url.contains("new")));
+        assert!(saved.assets[1].live);
+        assert_eq!(state, "failed");
+        assert_eq!(folder, Path::new("D:/Downloads").join(&current.id));
+        assert!(store.download_options(&id).unwrap().force);
+        let mapped = crate::model::remap_selection(&chosen, &current, Some(&[0]));
+        assert_eq!(mapped, Some(vec![1]));
+        current.assets[1].url = "https://sns-img-bd.xhscdn.com/different-image".into();
+        assert_eq!(store.refresh_sources(&current).unwrap(), 0);
+        assert!(store.payload(&id).unwrap().0.assets[0]
+            .url
+            .contains("second"));
     }
 
     #[test]

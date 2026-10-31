@@ -72,6 +72,59 @@ pub fn valid_note(note: &Note) -> bool {
         })
 }
 
+pub fn media_keys(asset: &Asset) -> Vec<String> {
+    [&asset.url, &asset.original_url]
+        .into_iter()
+        .filter_map(|raw| {
+            if !media_allowed(raw) {
+                return None;
+            }
+            let url = Url::parse(raw).ok()?;
+            let parts: Vec<_> = url.path().split('/').filter(|s| !s.is_empty()).collect();
+            let path = if url.host_str()?.starts_with("sns-webpic-") && parts.len() > 2 {
+                parts[2..].join("/")
+            } else {
+                parts.join("/")
+            };
+            let token = path.split('!').next()?;
+            if token.is_empty() {
+                None
+            } else {
+                Some(format!("{}:{}:{token}", asset.video, asset.live))
+            }
+        })
+        .collect()
+}
+pub fn same_media(a: &Asset, b: &Asset) -> bool {
+    let keys = media_keys(b);
+    media_keys(a).iter().any(|key| keys.contains(key))
+}
+pub fn remap_selection(old: &Note, new: &Note, selected: Option<&[usize]>) -> Option<Vec<usize>> {
+    if old.id != new.id || old.assets.is_empty() {
+        return None;
+    }
+    let mapped: Vec<_> = new
+        .assets
+        .iter()
+        .enumerate()
+        .filter(|(_, asset)| {
+            old.assets.iter().enumerate().any(|(i, previous)| {
+                selected.is_none_or(|s| s.contains(&i))
+                    && (previous.sequence == 0
+                        || asset.sequence == 0
+                        || previous.sequence == asset.sequence)
+                    && same_media(previous, asset)
+            })
+        })
+        .map(|(i, _)| i)
+        .collect();
+    if mapped.len() == new.assets.len() {
+        None
+    } else {
+        Some(mapped)
+    }
+}
+
 pub fn select_current_assets(
     current: &Note,
     mut captured: Note,

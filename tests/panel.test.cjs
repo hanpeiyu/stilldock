@@ -31,7 +31,7 @@ test('partial selection requires at least one image before sending a task',()=>{
   p.elements.get('pick-some').checked=true;p.elements.get('select-none').onclick();
   const count=p.sent.length;p.elements.get('download').onclick();assert.equal(p.sent.length,count);
   p.elements.get('asset-picks').querySelectorAll=()=>[{value:'1'}];p.elements.get('download').onclick();
-  assert.deepEqual(p.sent.at(-1),{action:'download',indices:[1],include_live:false,note_id:'abcdef0123456789abcdef01',expected_urls:['https://sns-img-bd.xhscdn.com/a','https://sns-img-bd.xhscdn.com/b']});
+  assert.deepEqual(p.sent.at(-1),{action:'download',indices:[1],include_live:false,force:false,note_id:'abcdef0123456789abcdef01',expected_urls:['https://sns-img-bd.xhscdn.com/a','https://sns-img-bd.xhscdn.com/b']});
 });
 
 test('thumbnails load on demand, retain selection on progress updates and release preview on note change',()=>{

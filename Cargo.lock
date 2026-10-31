@@ -3476,7 +3476,7 @@ dependencies = [
 
 [[package]]
 name = "xhs-browser"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "fs2",
  "imagesize",
@@ -3485,6 +3485,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "tao",
  "tokio",
  "url",

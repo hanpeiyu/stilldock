@@ -51,6 +51,9 @@ const media=r.querySelectorAll('.media')[2];pointer(media,'pointerdown',200,160)
 const oldImages=[...r.querySelectorAll('.card img')];const viewport=r.querySelector('.viewport');viewport.scrollTop=10000;viewport.dispatchEvent(new Event('scroll'));await delay(120);
 assert(r.querySelectorAll('.card').length<40,'scroll stays bounded');assert(oldImages.every(img=>!img.hasAttribute('src')),'recycled image sources released');
 viewport.scrollTop=0;viewport.dispatchEvent(new Event('scroll'));await delay(120);assert(r.querySelectorAll('.card input')[2].checked,'selection survives recycling');
+window.__stillDockMaterial.setStates({{note_id:id,expected_urls:window.__xhsReadNote().assets.map(a=>a.url),assets:Array.from({{length:120}},(_,index)=>({{index,state:index===2?'missing':'present',live_state:'new'}}))}});
+const filter=r.querySelector('select');filter.value='needed';filter.dispatchEvent(new Event('change'));await delay(60);assert(r.querySelectorAll('.card').length===1&&r.querySelector('.card').dataset.index==='2','filtered card keeps source index');assert(r.querySelector('.file-state').textContent==='文件缺失','per-card local state');filter.value='all';filter.dispatchEvent(new Event('change'));await delay(60);
+
 button('轮播视图').click();assert(!root(),'native carousel switch removes workspace');assert(!document.querySelector('.note-detail-mask').inert,'native inert restored');assert(getComputedStyle(document.querySelector('.note-detail-mask')).visibility==='visible','native visibility restored');
 document.getElementById('stilldock-material-launcher').click();assert(root(),'grid can reopen');
 window.__stillDockNavigation.back();await delay(380);assert(!document.getElementById('noteContainer')&&!root(),'return uses native close without remount');

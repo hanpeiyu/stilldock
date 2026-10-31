@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod download;
 mod file_ops;
+mod library;
 mod local_files;
 mod model;
 mod store;
@@ -33,7 +34,8 @@ use wry::{
 enum Message {
     Ui(String),
     Site(String),
-    Capture(String, Option<Vec<usize>>, bool, String, Vec<String>),
+    Capture(String, Option<Vec<usize>>, bool, bool, String, Vec<String>),
+    AssetsChecked(library::Snapshot),
     Notify,
     LocalChecked(Vec<(String, local_files::Status)>),
     Relinked(Result<(), String>),
@@ -115,11 +117,12 @@ fn snapshot(
     started: Instant,
     local: &HashMap<String, local_files::Status>,
     selection: &Option<Vec<usize>>,
+    assets: &Option<library::Snapshot>,
 ) {
     let db = store.lock().unwrap();
     send(
         panel,
-        json!({"kind":"snapshot","selection":selection,"material_view":db.setting("material_view","true")=="true","local":local,"jobs":db.jobs().unwrap_or_default(),"note":note,"collapsed":collapsed,
+        json!({"kind":"snapshot","asset_states":assets,"selection":selection,"material_view":db.setting("material_view","true")=="true","local":local,"jobs":db.jobs().unwrap_or_default(),"note":note,"collapsed":collapsed,
         "output_layout":db.setting("output_layout","note"),"export_json":db.setting("export_json","false")=="true","folder":db.setting("folder",""),"focus":db.setting("focus","true")=="true","ai":db.setting("ai","true")=="true",
         "gestures":db.setting("gestures","true")=="true","include_live":db.setting("include_live","false")=="true","comments":db.setting("comments","true")=="true","original":db.setting("original","false")=="true",
         "about":format!("Windows 10/11 · WebView2 · v{} · 本次运行 {:.0} 秒",env!("CARGO_PKG_VERSION"),started.elapsed().as_secs_f64())}),
@@ -390,6 +393,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     });
+    let asset_proxy = proxy.clone();
+    let asset_checker = library::Checker::start(store.clone(), move |snapshot| {
+        let _ = asset_proxy.send_event(Message::AssetsChecked(snapshot));
+    });
+    let mut asset_states: Option<library::Snapshot> = None;
+    let mut last_asset_check = Instant::now();
+    let mut last_asset_version = String::new();
     let mut local: HashMap<String, local_files::Status> = HashMap::new();
     let _ = check_tx.try_send(LocalRequest::Check(String::new()));
     let mut controls: HashMap<String, watch::Sender<u8>> = HashMap::new();
@@ -409,7 +419,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             Event::WindowEvent{event:WindowEvent::Resized(_),..}=>layout(&window,&browser,&panel,collapsed),
             Event::WindowEvent{event:WindowEvent::ScaleFactorChanged{..},..}=>layout(&window,&browser,&panel,collapsed),
             Event::WindowEvent{event:WindowEvent::CloseRequested,..}=>{
-                if store.lock().unwrap().busy(){collapsed=false;layout(&window,&browser,&panel,collapsed);snapshot(&panel,&store,&current,collapsed,started,&local,&selection);send(&panel,json!({"kind":"close"}));}else{*flow=ControlFlow::Exit;}
+                if store.lock().unwrap().busy(){collapsed=false;layout(&window,&browser,&panel,collapsed);snapshot(&panel,&store,&current,collapsed,started,&local,&selection,&asset_states);send(&panel,json!({"kind":"close"}));}else{*flow=ControlFlow::Exit;}
             }
             Event::UserEvent(Message::Loaded)=>{
                 update=true;
@@ -421,7 +431,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             Event::UserEvent(Message::Site(raw))=>{
                 if let Ok(value)=serde_json::from_str::<Value>(&raw){match value["kind"].as_str(){
                     Some("search_start")=>{collapsed=false;layout(&window,&browser,&panel,collapsed);update=true;}
-                    Some("page")=>{if let Ok(note)=serde_json::from_value::<Note>(value["note"].clone()){if site_allowed(&note.url){let newly_opened=!note.id.is_empty()&&note.id!=current.id;if note.id!=current.id||note.assets.iter().map(|a|&a.url).ne(current.assets.iter().map(|a|&a.url)){selection=None;}current=note;if newly_opened{send(&panel,json!({"kind":"current_note"}));let _=check_tx.try_send(LocalRequest::Check(current.id.clone()));}update=true;}}}
+                    Some("page")=>{if let Ok(note)=serde_json::from_value::<Note>(value["note"].clone()){if site_allowed(&note.url){let newly_opened=!note.id.is_empty()&&note.id!=current.id;let sources_changed=note.id!=current.id||note.assets.iter().map(|a|(&a.url,&a.original_url,&a.live_url)).ne(current.assets.iter().map(|a|(&a.url,&a.original_url,&a.live_url)));if sources_changed{selection=model::remap_selection(&current,&note,selection.as_deref());asset_states=None;asset_checker.request(&note);let _=store.lock().unwrap().refresh_sources(&note);}current=note;if newly_opened{send(&panel,json!({"kind":"current_note"}));let _=check_tx.try_send(LocalRequest::Check(current.id.clone()));}update=true;}}}
+                    Some("material_open")=>{if let Some(index)=value["index"].as_u64(){if let Some(path)=asset_states.as_ref().filter(|s|s.note_id==current.id).and_then(|s|s.assets.iter().find(|a|a.index==index as usize)).and_then(|a|a.path.as_ref()).and_then(|p|p.parent()){open_folder(path);}}},
                     Some("material_selection")=>{if value["note_id"].as_str()==Some(current.id.as_str())&&value["expected_urls"].as_array().is_some_and(|urls|urls.len()==current.assets.len()&&urls.iter().zip(&current.assets).all(|(url,asset)|url.as_str()==Some(asset.url.as_str()))){selection=value["indices"].as_array().map(|a|a.iter().filter_map(|i|i.as_u64().map(|i|i as usize)).filter(|i|*i<current.assets.len()).collect());update=true;}},
                     Some("material_live")=>{let enabled=value["value"].as_bool().unwrap_or(false);let _=store.lock().unwrap().set_setting("include_live",if enabled{"true"}else{"false"});update=true;},
                     Some("material_download")=>{
@@ -431,7 +442,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                             let indices:Vec<usize>=value["indices"].as_array().ok_or("请选择图片")?.iter().map(|v|v.as_u64().map(|i|i as usize).ok_or("选图序号无效")).collect::<Result<_,_>>()?;
                             let note=select_current_assets(&current,captured,&indices,setting(&store,"include_live",false))?;
                             let root=PathBuf::from(store.lock().unwrap().setting("folder",""));
-                            let id={store.lock().unwrap().add(&note,&root)?};
+                            let id={store.lock().unwrap().add_with_policy(&note,&root,value["force"].as_bool().unwrap_or(false))?};
                             enqueue(&store,&tx,&mut controls,id)
                         })();
                         match result{Ok(())=>{collapsed=false;layout(&window,&browser,&panel,collapsed);material_feedback(&browser,true,"已加入下载队列",value["note"]["id"].as_str().unwrap_or(""));},Err(error)=>material_feedback(&browser,false,&error,value["note"]["id"].as_str().unwrap_or(""))}update=true;
@@ -454,26 +465,27 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     _=>{}
                 }}
             }
-            Event::UserEvent(Message::Relinked(result))=>{match result{Ok(())=>toast(&panel,"已按文件名和大小关联新目录，未移动文件"),Err(error)=>toast(&panel,error)}update=true;}
+            Event::UserEvent(Message::AssetsChecked(snapshot))=>{if snapshot.note_id==current.id&&snapshot.expected_urls.iter().map(String::as_str).eq(current.assets.iter().map(|a|a.url.as_str())){let encoded=serde_json::to_string(&snapshot).unwrap_or_default();let _=browser.evaluate_script(&format!("window.__stillDockMaterial?.setStates({encoded});"));asset_states=Some(snapshot);update=true;}},
+            Event::UserEvent(Message::Relinked(result))=>{asset_checker.request(&current);match result{Ok(())=>toast(&panel,"已按文件名和大小关联新目录，未移动文件"),Err(error)=>toast(&panel,error)}update=true;}
             Event::UserEvent(Message::LocalChecked(results))=>{let completed:HashSet<_>=store.lock().unwrap().jobs().unwrap_or_default().into_iter().filter(|j|j.state=="done").map(|j|j.id).collect();local.retain(|id,_|completed.contains(id));for (id,status) in results{if completed.contains(&id){local.insert(id,status);}}update=true;}
             Event::UserEvent(Message::Notify)=>{
-                let finished:Vec<_>=store.lock().unwrap().jobs().unwrap_or_default().into_iter().filter(|j|!["pending","running","pausing","cancelling"].contains(&j.state.as_str())).collect();
+                let all_jobs=store.lock().unwrap().jobs().unwrap_or_default();let version=all_jobs.iter().filter(|j|j.note_id==current.id).map(|j|format!("{}:{}:{}",j.id,j.state,j.files)).collect::<Vec<_>>().join("|");let finished:Vec<_>=all_jobs.into_iter().filter(|j|!["pending","running","pausing","cancelling"].contains(&j.state.as_str())).collect();
                 let mut recheck=false;for job in finished{if controls.remove(&job.id).is_some(){local.remove(&job.id);recheck=true;}if gesture_jobs.remove(&job.id){gesture_notice(&browser,match job.state.as_str(){"done"=>"当前图片已保存","failed"=>"下载失败，可在下载栏重试","paused"=>"下载已暂停",_=>"下载已取消"});}}
-                if recheck{let _=check_tx.try_send(LocalRequest::Check(String::new()));}
+                if recheck{let _=check_tx.try_send(LocalRequest::Check(String::new()));}if version!=last_asset_version&&(recheck||last_asset_check.elapsed().as_secs_f32()>=1.0){asset_checker.request(&current);last_asset_version=version;last_asset_check=Instant::now();}
                 if (finish_exit||pause_exit)&&!store.lock().unwrap().busy(){*flow=ControlFlow::Exit;}update=true;
             }
-            Event::UserEvent(Message::Capture(raw,indices,include_live,expected_id,expected_urls))=>{
+            Event::UserEvent(Message::Capture(raw,indices,include_live,force,expected_id,expected_urls))=>{
                 let parsed=serde_json::from_str::<Value>(&raw).ok().and_then(|v|if let Some(s)=v.as_str(){serde_json::from_str::<Note>(s).ok()}else{serde_json::from_value::<Note>(v).ok()});
                 if let Some(mut note)=parsed{
                     if note.id!=expected_id || (indices.is_some() && note.assets.iter().map(|a|a.url.as_str()).collect::<Vec<_>>()!=expected_urls.iter().map(String::as_str).collect::<Vec<_>>()) {toast(&panel,"笔记或图片列表已经变化，请重新选择图片");} else {
                     select_assets(&mut note,indices.as_deref(),include_live);
-                    if valid_note(&note){let root=PathBuf::from(store.lock().unwrap().setting("folder",""));let result=store.lock().unwrap().add(&note,&root);match result{Ok(id)=>match enqueue(&store,&tx,&mut controls,id){Ok(())=>toast(&panel,"已加入下载队列"),Err(e)=>toast(&panel,e)},Err(e)=>toast(&panel,e)}}else{toast(&panel,"未能读取媒体地址，请等待笔记加载完成后重试");}}
+                    if valid_note(&note){let root=PathBuf::from(store.lock().unwrap().setting("folder",""));let result=store.lock().unwrap().add_with_policy(&note,&root,force);match result{Ok(id)=>match enqueue(&store,&tx,&mut controls,id){Ok(())=>toast(&panel,"已加入下载队列"),Err(e)=>toast(&panel,e)},Err(e)=>toast(&panel,e)}}else{toast(&panel,"未能读取媒体地址，请等待笔记加载完成后重试");}}
                 }else{toast(&panel,"笔记数据暂不可用，请重新打开笔记");}update=true;
             }
             Event::UserEvent(Message::Ui(raw))=>{
                 if let Ok(v)=serde_json::from_str::<Value>(&raw){let id=v["id"].as_str().unwrap_or("");match v["action"].as_str().unwrap_or(""){
                     "ready"=>update=true,
-                    "check_local"=>{let _=check_tx.try_send(LocalRequest::Check(String::new()));toast(&panel,"正在后台核对本地文件…");},
+                    "check_local"=>{asset_checker.request(&current);let _=check_tx.try_send(LocalRequest::Check(String::new()));toast(&panel,"正在后台核对本地文件…");},
                     "relink"=>{if let Some(folder)=rfd::FileDialog::new().set_title("选择移动后的素材文件夹（按原文件名和大小核对）").pick_folder(){if check_tx.try_send(LocalRequest::Relink(id.to_owned(),folder)).is_err(){toast(&panel,"正在核对文件，请稍后重新关联");}else{toast(&panel,"正在核对新目录，全部匹配后更新关联…");}}},
                     "repair"=>{if !pause_exit&&!finish_exit&&local.get(id).is_some_and(|s|s.repairable()){
                         match enqueue(&store,&tx,&mut controls,id.to_owned()){Ok(())=>{local.remove(id);toast(&panel,"已加入补下队列，现有文件将跳过");},Err(e)=>toast(&panel,e)}
@@ -482,12 +494,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     "toggle"=>{collapsed=!collapsed;layout(&window,&browser,&panel,collapsed);update=true;},
                     "home"=>{let _=browser.load_url("https://www.xiaohongshu.com/explore");},
                     "back"=>{let _=browser.go_back();},"forward"=>{let _=browser.go_forward();},"reload"=>{let _=browser.reload();},
-                    "download"=>{if pause_exit{toast(&panel,"正在退出，请稍后重试");}else{let indices=v["indices"].as_array().map(|a|a.iter().filter_map(|i|i.as_u64().map(|n|n as usize)).collect());let expected_urls:Vec<String>=v["expected_urls"].as_array().map(|items|items.iter().filter_map(|s|s.as_str().map(str::to_owned)).collect()).unwrap_or_default();let include_live=v["include_live"].as_bool().unwrap_or(false);let expected_id=v["note_id"].as_str().unwrap_or("").to_owned();let p=proxy.clone();if browser.evaluate_script_with_callback("JSON.stringify(window.__xhsReadNote?window.__xhsReadNote():null)",move|s|{let _=p.send_event(Message::Capture(s,indices.clone(),include_live,expected_id.clone(),expected_urls.clone()));}).is_err(){toast(&panel,"页面尚未就绪，请稍后重试");update=true;}}},
+                    "download"=>{if pause_exit{toast(&panel,"正在退出，请稍后重试");}else{let indices=v["indices"].as_array().map(|a|a.iter().filter_map(|i|i.as_u64().map(|n|n as usize)).collect());let expected_urls:Vec<String>=v["expected_urls"].as_array().map(|items|items.iter().filter_map(|s|s.as_str().map(str::to_owned)).collect()).unwrap_or_default();let include_live=v["include_live"].as_bool().unwrap_or(false);let force=v["force"].as_bool().unwrap_or(false);let expected_id=v["note_id"].as_str().unwrap_or("").to_owned();let p=proxy.clone();if browser.evaluate_script_with_callback("JSON.stringify(window.__xhsReadNote?window.__xhsReadNote():null)",move|s|{let _=p.send_event(Message::Capture(s,indices.clone(),include_live,force,expected_id.clone(),expected_urls.clone()));}).is_err(){toast(&panel,"页面尚未就绪，请稍后重试");update=true;}}},
                     "pause"|"cancel"=>{control(&store,&controls,id,v["action"]=="cancel");update=true;},
                     "resume"=>{if !pause_exit{if let Err(e)=enqueue(&store,&tx,&mut controls,id.to_owned()){toast(&panel,e)}}update=true;},
                     "pause_all"|"resume_all"=>{let jobs=store.lock().unwrap().jobs().unwrap_or_default();for job in jobs{if v["action"]=="pause_all"{control(&store,&controls,&job.id,false);}else if ["paused","failed"].contains(&job.state.as_str()){let _=enqueue(&store,&tx,&mut controls,job.id);}}update=true;},
                     "open_folder"=>{let path=PathBuf::from(store.lock().unwrap().setting("folder",""));open_folder(&path);},
-                    "open_job"=>{if let Ok((_,p,_))=store.lock().unwrap().payload(id){if p.is_dir(){open_folder(&p);}else{toast(&panel,"原目录不存在或暂时无法访问，请检查磁盘或打开笔记补下");}}},
+                    "open_job"=>{let payload={store.lock().unwrap().payload(id)};if let Ok((_,p,_))=payload{let referenced=store.lock().unwrap().file_records(id).ok().and_then(|files|files.iter().find(|(path,_)|path.parent()==Some(p.as_path())).or_else(||files.first()).and_then(|(path,_)|path.parent().map(Path::to_path_buf)));if let Some(folder)=referenced.filter(|folder|folder.is_dir()){open_folder(&folder);}else if p.is_dir(){open_folder(&p);}else{toast(&panel,"原目录不存在或暂时无法访问，请检查磁盘或打开笔记补下");}}},
                     "open_note"=>{if let Ok((n,_,_))=store.lock().unwrap().payload(id){if site_allowed(&n.url){let _=browser.load_url(&n.url);}}},
                     "link"=>{let url=v["url"].as_str().unwrap_or("").trim();if site_allowed(url){let _=browser.load_url(url);}else{toast(&panel,"只支持完整的 HTTPS 小红书链接");}},
                     "choose_folder"=>{if let Some(path)=rfd::FileDialog::new().set_title("选择下载文件夹").pick_folder(){let test=path.join(".xhs-write-check");match OpenOptions::new().create_new(true).write(true).open(&test){Ok(f)=>{drop(f);let _=std::fs::remove_file(test);let _=store.lock().unwrap().set_setting("folder",&path.to_string_lossy());toast(&panel,"已保存，新任务使用新目录");},Err(_)=>toast(&panel,"该目录不可写，请更换目录")}}update=true;},
@@ -499,7 +511,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             _=>{}
         }
-        if update{snapshot(&panel,&store,&current,collapsed,started,&local,&selection);}
+        if update{snapshot(&panel,&store,&current,collapsed,started,&local,&selection,&asset_states);}
     });
 }
 

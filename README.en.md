@@ -77,3 +77,9 @@ After moving a complete task's files, use **关联新目录** in history. All or
 Image posts open in an adaptive card grid with shared sidebar selection, select/invert/clear, one-image preview and selected downloads. LIVE uses the existing preference and original image numbering. Escape closes the preview first, then returns through native note closing. Switch to the carousel per post or disable the default grid in settings; video and unrecognized posts retain native rendering.
 
 Cards are virtualized by visible rows, thumbnails load near the viewport, and preview image references/observers are released on leaving. Shadow DOM isolates website CSS. Native detail interactions and video playback are suspended while covered, but the underlying page DOM remains available for returning to the same search position. This does not guarantee immediate WebView2 process memory reclamation.
+
+## Local states and reliable downloads
+
+Cards show availability/queue states, can filter needed items, select missing resources, and open existing file locations. Within the same note, an existing matching media file is reused in its original location by default. Opt into a new copy using the force-redownload checkbox. Resume always preserves already complete files in the same job.
+
+Connection/body failures and HTTP 500/502/503/504 retry at most twice with cancellable 0.5s/1.5s backoff. Permission, expiration, rate-limit, disk and format errors do not loop. Reopening a note refreshes matching signed sources for paused/failed jobs while retaining selected original indices and LIVE pairs; resume remains explicit. New downloads record full SHA-256, but cross-post deduplication and automatic deletion are not implemented. Lookup is bounded to 200 same-note jobs / 4000 file records.

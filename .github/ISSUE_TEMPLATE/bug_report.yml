@@ -9,7 +9,7 @@ body:
     id: version
     attributes:
       label: 原帧版本
-      placeholder: v0.5.0
+      placeholder: v0.6.0
     validations:
       required: true
   - type: input
