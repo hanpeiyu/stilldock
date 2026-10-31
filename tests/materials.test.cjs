@@ -56,8 +56,8 @@ test('downloads use selected original indices and LIVE configuration without loa
   assert.ok(p.find('img').every(img=>!img.src||!img.src.includes('/hq')));
 });
 test('preview loads one web image and releases its source on closing and note changes',()=>{
-  const p=boot(4);p.find('.zoom')[1].click();assert.equal(p.find('.preview-image')[0].src,p.note.assets[1].url);assert.equal(p.api.currentImage().index,1);
-  p.button('下一张').click();assert.equal(p.api.currentImage().index,2);assert.equal(p.api.closePreview(),true);assert.equal(p.find('.preview-image')[0].src,undefined);assert.equal(p.api.closePreview(),false);
+  const p=boot(4);p.find('.zoom')[1].click();assert.equal(p.find('.preview-image')[0].src,p.note.assets[1].url);assert.equal(p.find('.preview-image')[0].src,p.note.assets[1].url);
+  p.button('下一张').click();assert.equal(p.find('.preview-image')[0].src,p.note.assets[2].url);assert.equal(p.api.closePreview(),true);assert.equal(p.find('.preview-image')[0].src,undefined);assert.equal(p.api.closePreview(),false);
   p.find('.zoom')[0].click();const image=p.find('.preview-image')[0],observer=p.resizes[0];p.note={id:'',assets:[]};p.api.update(p.note);
   assert.equal(p.host,undefined);assert.equal(image.src,undefined);assert.equal(observer.disconnected,true);assert.equal(p.mask.inert,false);assert.equal('data-sd-suspended' in p.mask.attrs,false);
 });
@@ -73,12 +73,6 @@ test('stale page data cannot submit previously selected images and back does not
   p.api.prepareBack();p.api.update(p.note);assert.equal(p.api.isOpen(),false);
   p.note={id:'',assets:[]};p.api.update(p.note);p.note={id:'abcdef0123456789abcdef02',assets:[{url:'https://sns-img-bd.xhscdn.com/new'}]};p.api.update(p.note);assert.equal(p.api.isOpen(),true);
 });
-test('grid gestures resolve the card under the pointer and never guess from empty space',()=>{
-  const p=boot(4);assert.match(p.api.currentImage().error,/卡片/);
-  const media=p.find('.media')[2];p.listeners.pointerdown[0]({button:2,composedPath:()=>[media,p.host]});assert.equal(p.api.currentImage().index,2);
-  p.listeners.pointerdown[0]({button:2,composedPath:()=>[p.host]});assert.match(p.api.currentImage().error,/卡片/);
-});
-
 test('login or verification dialogs take precedence over the material workspace',()=>{
   const p=boot(4);const dialog={closest:()=>null,getClientRects:()=>[{}]};p.document.querySelectorAll=()=>[dialog];p.api.update(p.note);assert.equal(p.api.isOpen(),false);assert.equal(p.mask.inert,false);
   p.document.querySelectorAll=()=>[];p.api.update(p.note);assert.equal(p.api.isOpen(),true);
@@ -98,4 +92,12 @@ test('source signature refresh preserves selected images and rejects stale statu
   assert.equal(p.find('.count')[0].textContent,'已选 1 / 3');assert.equal(p.find('.card')[1].children[1].children[0].children[0].checked,true);
   p.api.setStates({note_id:p.note.id,expected_urls:old,assets:[{index:0,state:'present'}]});assert.equal(p.find('.file-state')[0].textContent,'核对中…');
   const force=p.find('.live-option').find(label=>label.children.some(n=>n.textContent==='重新下载已有图')).children[0];force.checked=true;p.button('下载选中 1 张').click();assert.equal(p.sent.at(-1).force,true);assert.deepEqual(p.sent.at(-1).indices,[1]);
+});
+
+test('preview backdrop dismisses one layer while image drags and dialog padding do not',()=>{
+  const p=boot(3);p.find('.zoom')[0].click();const dialog=p.find('dialog')[0];dialog.getBoundingClientRect=()=>({left:100,right:900,top:100,bottom:700});
+  const emit=(type,x,target=dialog)=>{for(const fn of dialog.events[type]||[])fn({button:0,clientX:x,clientY:300,target,preventDefault(){},stopPropagation(){}});};
+  emit('pointerdown',300,p.find('.preview-image')[0]);emit('pointerup',20);assert.equal(dialog.open,true);
+  emit('pointerdown',300);emit('pointerup',300);assert.equal(dialog.open,true);
+  emit('pointerdown',20);emit('pointerup',20);assert.equal(dialog.open,false);assert.equal(p.api.isOpen(),true);
 });

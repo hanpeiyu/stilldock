@@ -43,6 +43,17 @@ pub fn note_id_valid(id: &str) -> bool {
     id.len() == 24 && id.bytes().all(|c| c.is_ascii_hexdigit())
 }
 
+pub fn search_url(keyword: &str) -> Option<String> {
+    let keyword = keyword.trim();
+    if keyword.is_empty() || keyword.chars().count() > 120 || keyword.chars().any(char::is_control)
+    {
+        return None;
+    }
+    let mut url = Url::parse("https://www.xiaohongshu.com/search_result").ok()?;
+    url.query_pairs_mut().append_pair("keyword", keyword);
+    Some(url.to_string())
+}
+
 pub fn site_allowed(raw: &str) -> bool {
     Url::parse(raw).ok().is_some_and(|u| {
         u.scheme() == "https"
@@ -290,6 +301,20 @@ mod tests {
         let mut bad = note.clone();
         bad.assets[1].original_url = "https://evil.example/image".into();
         assert!(select_current_assets(&note, bad, &[1], false).is_err());
+    }
+
+    #[test]
+    fn related_keywords_always_build_a_plain_same_origin_search() {
+        let url = Url::parse(&search_url("法式 &source=ai").unwrap()).unwrap();
+        assert_eq!(url.host_str(), Some("www.xiaohongshu.com"));
+        assert_eq!(url.path(), "/search_result");
+        assert_eq!(
+            url.query_pairs().collect::<Vec<_>>(),
+            vec![("keyword".into(), "法式 &source=ai".into())]
+        );
+        assert!(search_url(" ").is_none());
+        assert!(search_url("a\nb").is_none());
+        assert!(search_url(&"a".repeat(121)).is_none());
     }
 
     #[test]

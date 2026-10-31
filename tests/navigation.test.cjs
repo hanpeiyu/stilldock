@@ -34,14 +34,18 @@ test('Escape on the list does not consume keyboard events',()=>{
   const p=boot();p.listeners.keydown({key:'Escape',preventDefault(){throw Error('should not prevent')},stopImmediatePropagation(){throw Error('should not stop')}});assert.equal(p.backCount,0);
 });
 
-test('Escape cancels an active gesture before closing a note',()=>{
-  const p=boot({initial:'/explore/'+noteId});let cancelled=0;p.window.__stillDockGestures={cancelActive(){cancelled++;return true}};
-  p.listeners.keydown({key:'Escape',preventDefault(){},stopImmediatePropagation(){}});assert.equal(cancelled,1);assert.equal(p.backCount,0);assert.equal(p.assigned,'');
-});
-
 test('Escape closes the material preview first and native close resumes only after workspace cleanup',()=>{
   const p=boot({initial:'/explore/'+noteId,nativeClose:true});let preview=true,prepared=0;
   p.window.__stillDockMaterial={isOpen:()=>true,closePreview(){const old=preview;preview=false;return old;},prepareBack(){prepared++;}};
   p.listeners.keydown({key:'Escape',preventDefault(){},stopImmediatePropagation(){}});assert.equal(p.closeCount,0);assert.equal(prepared,0);
+  p.listeners.keyup({key:'Escape',preventDefault(){},stopImmediatePropagation(){}});
   p.listeners.keydown({key:'Escape',preventDefault(){},stopImmediatePropagation(){}});assert.equal(p.closeCount,1);assert.equal(prepared,1);
+});
+
+test('one held Escape consumes repeats and keyup without closing the underlying note',()=>{
+  const p=boot({initial:'/explore/'+noteId,nativeClose:true});let preview=true;
+  p.window.__stillDockMaterial={isOpen:()=>true,isPreviewOpen:()=>preview,closePreview(){if(!preview)return false;preview=false;return true;},prepareBack(){}};
+  const event={key:'Escape',preventDefault(){},stopImmediatePropagation(){}};p.listeners.keydown(event);p.listeners.keydown({...event,repeat:true});assert.equal(p.closeCount,0);
+  let prevented=false;p.listeners.keyup({...event,preventDefault(){prevented=true;}});assert.equal(prevented,true);assert.equal(p.closeCount,0);
+  p.listeners.keydown(event);assert.equal(p.closeCount,1);
 });

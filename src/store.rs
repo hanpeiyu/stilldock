@@ -136,6 +136,7 @@ impl Store {
         }
         Ok(())
     }
+    #[cfg(test)]
     pub fn add(&self, note: &Note, root: &Path) -> Result<String, String> {
         self.add_with_policy(note, root, false)
     }
@@ -597,7 +598,7 @@ mod tests {
     }
 
     #[test]
-    fn gesture_queue_allows_different_images_but_blocks_overlap() {
+    fn selection_queue_allows_different_images_but_blocks_overlap() {
         let store = Store::open(Path::new(":memory:")).unwrap();
         let mut note = Note {
             id: "abcdef0123456789abcdef01".into(),

@@ -71,10 +71,6 @@ fn send(panel: &WebView, value: Value) {
 fn toast(panel: &WebView, message: impl Into<String>) {
     send(panel, json!({"kind":"toast","message":message.into()}));
 }
-fn gesture_notice(browser: &WebView, message: &str) {
-    let encoded = serde_json::to_string(message).unwrap_or_default();
-    let _ = browser.evaluate_script(&format!("window.__stillDockGestures?.notify({encoded});"));
-}
 fn setting(store: &SharedStore, key: &str, default: bool) -> bool {
     store
         .lock()
@@ -89,7 +85,7 @@ fn material_feedback(browser: &WebView, ok: bool, message: &str, note_id: &str) 
     let message = serde_json::to_string(message).unwrap_or_default();
     let note_id = serde_json::to_string(note_id).unwrap_or_default();
     let _ = browser.evaluate_script(&format!(
-        "window.__stillDockMaterial?.result({ok},{message},{note_id});"
+        "window.__stillDockMaterial?.result({ok},{message},{note_id});window.__stillDockVideo?.result({ok},{message},{note_id});"
     ));
 }
 fn adapters(store: &SharedStore) -> String {
@@ -118,13 +114,14 @@ fn snapshot(
     local: &HashMap<String, local_files::Status>,
     selection: &Option<Vec<usize>>,
     assets: &Option<library::Snapshot>,
+    workspace: &str,
 ) {
     let db = store.lock().unwrap();
     send(
         panel,
-        json!({"kind":"snapshot","asset_states":assets,"selection":selection,"material_view":db.setting("material_view","true")=="true","local":local,"jobs":db.jobs().unwrap_or_default(),"note":note,"collapsed":collapsed,
+        json!({"kind":"snapshot","workspace_mode":workspace,"asset_states":assets,"selection":selection,"material_view":db.setting("material_view","true")=="true","local":local,"jobs":db.jobs().unwrap_or_default(),"note":note,"collapsed":collapsed,
         "output_layout":db.setting("output_layout","note"),"export_json":db.setting("export_json","false")=="true","folder":db.setting("folder",""),"focus":db.setting("focus","true")=="true","ai":db.setting("ai","true")=="true",
-        "gestures":db.setting("gestures","true")=="true","include_live":db.setting("include_live","false")=="true","comments":db.setting("comments","true")=="true","original":db.setting("original","false")=="true",
+        "include_live":db.setting("include_live","false")=="true","comments":db.setting("comments","true")=="true","original":db.setting("original","false")=="true",
         "about":format!("Windows 10/11 · WebView2 · v{} · 本次运行 {:.0} 秒",env!("CARGO_PKG_VERSION"),started.elapsed().as_secs_f64())}),
     );
 }
@@ -280,15 +277,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let materials = include_str!("../assets/materials.js")
         .replace("__MATERIAL_CONFIG__", &material_config(&store).to_string());
     let initial = format!("{initial}\n{materials}");
-    let gestures = include_str!("../assets/gestures.js").replace(
-        "__GESTURES_ENABLED__",
-        if setting(&store, "gestures", true) {
-            "true"
-        } else {
-            "false"
-        },
+    let initial = format!(
+        "{initial}\n{}\n{}",
+        include_str!("../assets/video.js"),
+        include_str!("../assets/search-links.js")
     );
-    let initial = format!("{initial}\n{gestures}");
     let browser = WebViewBuilder::new_with_web_context(&mut context)
         .with_url("https://www.xiaohongshu.com/explore")
         .with_bounds(Rect {
@@ -403,7 +396,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut local: HashMap<String, local_files::Status> = HashMap::new();
     let _ = check_tx.try_send(LocalRequest::Check(String::new()));
     let mut controls: HashMap<String, watch::Sender<u8>> = HashMap::new();
-    let mut gesture_jobs: HashSet<String> = HashSet::new();
+    let mut workspace_mode = String::from("native");
     let mut collapsed = true;
     let mut current = Note::default();
     let mut selection: Option<Vec<usize>> = None;
@@ -419,7 +412,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             Event::WindowEvent{event:WindowEvent::Resized(_),..}=>layout(&window,&browser,&panel,collapsed),
             Event::WindowEvent{event:WindowEvent::ScaleFactorChanged{..},..}=>layout(&window,&browser,&panel,collapsed),
             Event::WindowEvent{event:WindowEvent::CloseRequested,..}=>{
-                if store.lock().unwrap().busy(){collapsed=false;layout(&window,&browser,&panel,collapsed);snapshot(&panel,&store,&current,collapsed,started,&local,&selection,&asset_states);send(&panel,json!({"kind":"close"}));}else{*flow=ControlFlow::Exit;}
+                if store.lock().unwrap().busy(){collapsed=false;layout(&window,&browser,&panel,collapsed);snapshot(&panel,&store,&current,collapsed,started,&local,&selection,&asset_states,&workspace_mode);send(&panel,json!({"kind":"close"}));}else{*flow=ControlFlow::Exit;}
             }
             Event::UserEvent(Message::Loaded)=>{
                 update=true;
@@ -431,7 +424,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             Event::UserEvent(Message::Site(raw))=>{
                 if let Ok(value)=serde_json::from_str::<Value>(&raw){match value["kind"].as_str(){
                     Some("search_start")=>{collapsed=false;layout(&window,&browser,&panel,collapsed);update=true;}
-                    Some("page")=>{if let Ok(note)=serde_json::from_value::<Note>(value["note"].clone()){if site_allowed(&note.url){let newly_opened=!note.id.is_empty()&&note.id!=current.id;let sources_changed=note.id!=current.id||note.assets.iter().map(|a|(&a.url,&a.original_url,&a.live_url)).ne(current.assets.iter().map(|a|(&a.url,&a.original_url,&a.live_url)));if sources_changed{selection=model::remap_selection(&current,&note,selection.as_deref());asset_states=None;asset_checker.request(&note);let _=store.lock().unwrap().refresh_sources(&note);}current=note;if newly_opened{send(&panel,json!({"kind":"current_note"}));let _=check_tx.try_send(LocalRequest::Check(current.id.clone()));}update=true;}}}
+                    Some("page")=>{if let Ok(note)=serde_json::from_value::<Note>(value["note"].clone()){if site_allowed(&note.url){let newly_opened=!note.id.is_empty()&&note.id!=current.id;if note.id!=current.id{workspace_mode="native".into();}if let Some(mode)=value["workspace"].as_str().filter(|m|["grid","video","native"].contains(m)){workspace_mode=mode.to_owned();}let sources_changed=note.id!=current.id||note.assets.iter().map(|a|(&a.url,&a.original_url,&a.live_url)).ne(current.assets.iter().map(|a|(&a.url,&a.original_url,&a.live_url)));if sources_changed{selection=model::remap_selection(&current,&note,selection.as_deref());asset_states=None;asset_checker.request(&note);let _=store.lock().unwrap().refresh_sources(&note);}current=note;if newly_opened{send(&panel,json!({"kind":"current_note"}));let _=check_tx.try_send(LocalRequest::Check(current.id.clone()));}update=true;}}}
+                    Some("workspace")=>{if value["note_id"].as_str()==Some(current.id.as_str()){if let Some(mode)=value["mode"].as_str().filter(|m|["grid","video","native"].contains(m)){workspace_mode=mode.to_owned();update=true;}}},
+                    Some("keyword_search")=>{if let Some(url)=value["keyword"].as_str().and_then(model::search_url){collapsed=false;layout(&window,&browser,&panel,collapsed);let _=browser.load_url(&url);update=true;}},
                     Some("material_open")=>{if let Some(index)=value["index"].as_u64(){if let Some(path)=asset_states.as_ref().filter(|s|s.note_id==current.id).and_then(|s|s.assets.iter().find(|a|a.index==index as usize)).and_then(|a|a.path.as_ref()).and_then(|p|p.parent()){open_folder(path);}}},
                     Some("material_selection")=>{if value["note_id"].as_str()==Some(current.id.as_str())&&value["expected_urls"].as_array().is_some_and(|urls|urls.len()==current.assets.len()&&urls.iter().zip(&current.assets).all(|(url,asset)|url.as_str()==Some(asset.url.as_str()))){selection=value["indices"].as_array().map(|a|a.iter().filter_map(|i|i.as_u64().map(|i|i as usize)).filter(|i|*i<current.assets.len()).collect());update=true;}},
                     Some("material_live")=>{let enabled=value["value"].as_bool().unwrap_or(false);let _=store.lock().unwrap().set_setting("include_live",if enabled{"true"}else{"false"});update=true;},
@@ -447,21 +442,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         })();
                         match result{Ok(())=>{collapsed=false;layout(&window,&browser,&panel,collapsed);material_feedback(&browser,true,"已加入下载队列",value["note"]["id"].as_str().unwrap_or(""));},Err(error)=>material_feedback(&browser,false,&error,value["note"]["id"].as_str().unwrap_or(""))}update=true;
                     },
-                    Some("gesture_ready")=>{let _=browser.evaluate_script(&format!("window.__stillDockGestures?.setEnabled({});",setting(&store,"gestures",true)));}
-                    Some("gesture")=>{if setting(&store,"gestures",true){match value["action"].as_str(){
-                        Some("toggle_sidebar")=>{collapsed=!collapsed;layout(&window,&browser,&panel,collapsed);gesture_notice(&browser,if collapsed{"下载栏已收起"}else{"下载栏已展开"});update=true;}
-                        Some("download_current")=>{
-                            if pause_exit||finish_exit{gesture_notice(&browser,"正在退出，请稍后重试");}else if let (Ok(mut note),Some(index))=(serde_json::from_value::<Note>(value["note"].clone()),value["index"].as_u64()){
-                                if (index as usize)<note.assets.len()&&!note.assets[index as usize].video{
-                                    select_assets(&mut note,Some(&[index as usize]),setting(&store,"include_live",false));
-                                    if valid_note(&note){let root=PathBuf::from(store.lock().unwrap().setting("folder",""));let result=store.lock().unwrap().add(&note,&root);
-                                        match result{Ok(id)=>match enqueue(&store,&tx,&mut controls,id.clone()){Ok(())=>{gesture_jobs.insert(id);gesture_notice(&browser,"当前图片已加入下载队列");},Err(error)=>gesture_notice(&browser,&error)},Err(error)=>gesture_notice(&browser,&error)}
-                                    }else{gesture_notice(&browser,"当前图片尚未加载完成，请重试");}
-                                }else{gesture_notice(&browser,"无法确认当前图片，请使用侧栏选图");}
-                            }else{gesture_notice(&browser,"当前图片尚未加载完成，请重试");}update=true;
-                        }
-                        _=>{}
-                    }}}
                     _=>{}
                 }}
             }
@@ -470,7 +450,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             Event::UserEvent(Message::LocalChecked(results))=>{let completed:HashSet<_>=store.lock().unwrap().jobs().unwrap_or_default().into_iter().filter(|j|j.state=="done").map(|j|j.id).collect();local.retain(|id,_|completed.contains(id));for (id,status) in results{if completed.contains(&id){local.insert(id,status);}}update=true;}
             Event::UserEvent(Message::Notify)=>{
                 let all_jobs=store.lock().unwrap().jobs().unwrap_or_default();let version=all_jobs.iter().filter(|j|j.note_id==current.id).map(|j|format!("{}:{}:{}",j.id,j.state,j.files)).collect::<Vec<_>>().join("|");let finished:Vec<_>=all_jobs.into_iter().filter(|j|!["pending","running","pausing","cancelling"].contains(&j.state.as_str())).collect();
-                let mut recheck=false;for job in finished{if controls.remove(&job.id).is_some(){local.remove(&job.id);recheck=true;}if gesture_jobs.remove(&job.id){gesture_notice(&browser,match job.state.as_str(){"done"=>"当前图片已保存","failed"=>"下载失败，可在下载栏重试","paused"=>"下载已暂停",_=>"下载已取消"});}}
+                let mut recheck=false;for job in finished{if controls.remove(&job.id).is_some(){local.remove(&job.id);recheck=true;}}
                 if recheck{let _=check_tx.try_send(LocalRequest::Check(String::new()));}if version!=last_asset_version&&(recheck||last_asset_check.elapsed().as_secs_f32()>=1.0){asset_checker.request(&current);last_asset_version=version;last_asset_check=Instant::now();}
                 if (finish_exit||pause_exit)&&!store.lock().unwrap().busy(){*flow=ControlFlow::Exit;}update=true;
             }
@@ -493,7 +473,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     "selection"=>{if v["note_id"].as_str()==Some(current.id.as_str()){selection=v["indices"].as_array().map(|a|a.iter().filter_map(|i|i.as_u64().map(|i|i as usize)).filter(|i|*i<current.assets.len()).collect());let encoded=serde_json::to_string(&selection).unwrap_or_else(|_|"null".into());let _=browser.evaluate_script(&format!("window.__stillDockMaterial?.setSelection({encoded});"));update=true;}},
                     "toggle"=>{collapsed=!collapsed;layout(&window,&browser,&panel,collapsed);update=true;},
                     "home"=>{let _=browser.load_url("https://www.xiaohongshu.com/explore");},
-                    "back"=>{let _=browser.go_back();},"forward"=>{let _=browser.go_forward();},"reload"=>{let _=browser.reload();},
+                    "back"=>{let _=browser.evaluate_script("if(window.__stillDockNavigation?.isOpen()){window.__stillDockNavigation.back()}else{history.back()}");},"forward"=>{let _=browser.go_forward();},"reload"=>{let _=browser.reload();},
                     "download"=>{if pause_exit{toast(&panel,"正在退出，请稍后重试");}else{let indices=v["indices"].as_array().map(|a|a.iter().filter_map(|i|i.as_u64().map(|n|n as usize)).collect());let expected_urls:Vec<String>=v["expected_urls"].as_array().map(|items|items.iter().filter_map(|s|s.as_str().map(str::to_owned)).collect()).unwrap_or_default();let include_live=v["include_live"].as_bool().unwrap_or(false);let force=v["force"].as_bool().unwrap_or(false);let expected_id=v["note_id"].as_str().unwrap_or("").to_owned();let p=proxy.clone();if browser.evaluate_script_with_callback("JSON.stringify(window.__xhsReadNote?window.__xhsReadNote():null)",move|s|{let _=p.send_event(Message::Capture(s,indices.clone(),include_live,force,expected_id.clone(),expected_urls.clone()));}).is_err(){toast(&panel,"页面尚未就绪，请稍后重试");update=true;}}},
                     "pause"|"cancel"=>{control(&store,&controls,id,v["action"]=="cancel");update=true;},
                     "resume"=>{if !pause_exit{if let Err(e)=enqueue(&store,&tx,&mut controls,id.to_owned()){toast(&panel,e)}}update=true;},
@@ -503,7 +483,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     "open_note"=>{if let Ok((n,_,_))=store.lock().unwrap().payload(id){if site_allowed(&n.url){let _=browser.load_url(&n.url);}}},
                     "link"=>{let url=v["url"].as_str().unwrap_or("").trim();if site_allowed(url){let _=browser.load_url(url);}else{toast(&panel,"只支持完整的 HTTPS 小红书链接");}},
                     "choose_folder"=>{if let Some(path)=rfd::FileDialog::new().set_title("选择下载文件夹").pick_folder(){let test=path.join(".xhs-write-check");match OpenOptions::new().create_new(true).write(true).open(&test){Ok(f)=>{drop(f);let _=std::fs::remove_file(test);let _=store.lock().unwrap().set_setting("folder",&path.to_string_lossy());toast(&panel,"已保存，新任务使用新目录");},Err(_)=>toast(&panel,"该目录不可写，请更换目录")}}update=true;},
-                    "setting"=>{if let Some(key)=v["key"].as_str(){if key=="output_layout"{if let Some(layout)=v["value"].as_str(){if ["note","flat"].contains(&layout){let _=store.lock().unwrap().set_setting(key,layout);}}}else if key=="export_json"{let _=store.lock().unwrap().set_setting(key,if v["value"].as_bool().unwrap_or(false){"true"}else{"false"});}else if key=="gestures"{let enabled=v["value"].as_bool().unwrap_or(true);let _=store.lock().unwrap().set_setting(key,if enabled{"true"}else{"false"});let _=browser.evaluate_script(&format!("window.__stillDockGestures?.setEnabled({enabled});"));}else if key=="include_live"{let _=store.lock().unwrap().set_setting(key,if v["value"].as_bool().unwrap_or(false){"true"}else{"false"});let _=browser.evaluate_script(&format!("window.__stillDockMaterial?.setConfig({});",material_config(&store)));}else if ["focus","ai","comments","original","material_view"].contains(&key){let _=store.lock().unwrap().set_setting(key,if v["value"].as_bool().unwrap_or(false){"true"}else{"false"});let _=browser.evaluate_script(&adapters(&store));let initial=format!("window.__xhsInstallAdapters=()=>{{{}}}",adapters(&store));let _=browser.evaluate_script(&initial);toast(&panel,"已更新浏览模式");}}update=true;},
+                    "setting"=>{if let Some(key)=v["key"].as_str(){if key=="output_layout"{if let Some(layout)=v["value"].as_str(){if ["note","flat"].contains(&layout){let _=store.lock().unwrap().set_setting(key,layout);}}}else if key=="export_json"{let _=store.lock().unwrap().set_setting(key,if v["value"].as_bool().unwrap_or(false){"true"}else{"false"});}else if key=="include_live"{let _=store.lock().unwrap().set_setting(key,if v["value"].as_bool().unwrap_or(false){"true"}else{"false"});let _=browser.evaluate_script(&format!("window.__stillDockMaterial?.setConfig({});",material_config(&store)));}else if ["focus","ai","comments","original","material_view"].contains(&key){let _=store.lock().unwrap().set_setting(key,if v["value"].as_bool().unwrap_or(false){"true"}else{"false"});let _=browser.evaluate_script(&adapters(&store));let initial=format!("window.__xhsInstallAdapters=()=>{{{}}}",adapters(&store));let _=browser.evaluate_script(&initial);toast(&panel,"已更新浏览模式");}}update=true;},
                     "pause_exit"=>{pause_exit=true;let jobs=store.lock().unwrap().jobs().unwrap_or_default();for job in jobs{control(&store,&controls,&job.id,false);}if !store.lock().unwrap().busy(){*flow=ControlFlow::Exit;}update=true;},
                     "finish_exit"=>{finish_exit=true;toast(&panel,"队列处理结束后退出");if !store.lock().unwrap().busy(){*flow=ControlFlow::Exit;}},
                     "stay"=>{finish_exit=false;},_=>{}
@@ -511,7 +491,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             _=>{}
         }
-        if update{snapshot(&panel,&store,&current,collapsed,started,&local,&selection,&asset_states);}
+        if update{snapshot(&panel,&store,&current,collapsed,started,&local,&selection,&asset_states,&workspace_mode);}
     });
 }
 

@@ -38,32 +38,26 @@
 
 1. 到 [Releases](https://github.com/hanpeiyu/stilldock/releases) 下载 Windows x64 预览版。
 2. 安装包 `StillDock-<版本>-windows-x64-setup.exe` 按当前用户安装；便携包解压后运行 `xhs-browser.exe`。
-3. 首次打开，在应用内完成小红书登录。搜索后打开笔记，在右侧保存整篇或勾选部分图片。
+3. 首次打开，在应用内完成小红书登录。搜索后打开笔记，在左侧网格挑选图片或直接下载视频，右侧查看任务。
 
 **环境**：64 位 Windows 10/11，以及 [Microsoft Edge WebView2 Evergreen Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)。已安装时复用；安装包在缺少 Runtime 时联网补装。便携版需要自行准备 Runtime。应用需要联网访问小红书。
 
 > 当前为早期预览版：未代码签名，尚未在独立 Windows 10 设备完成验证，也未完成长时间压力测试。自动化测试不能代替真实网站验收。
 
-## 右键手势
+## 页面操作与任务面板
 
-在网页区域按住右键划动，松开后执行；方向提示和轨迹会在划动时显示。
+图片在左侧网格直接挑选和下载，视频保留原播放器并提供右上角“下载视频”。右侧“任务”面板管理队列、历史和设置；网格/视频入口可用时，重复的选图控件折叠在“备用下载与选图”中，可随时手动展开。回到原轮播或布局适配失败时，备用控件自动展开。两处选图同步，布局适配失败不阻断已读取的笔记来源数据。
 
-| 方向 | 动作 |
-| --- | --- |
-| ← 左划 | 关闭笔记，返回搜索结果 |
-| ↓ 下划 | 保存当前正在看的图片；LIVE 是否一并下载沿用开关设置 |
-| → 右划 | 展开/收起下载侧栏 |
+大图预览按 Esc 或点击弹窗外侧可回到网格；再次按 Esc 才返回搜索。Esc 按下、长按重复和松开作为一次操作处理，避免原网页随后关闭帖子。右侧返回按钮也优先逐级返回。右键手势已移除，右键菜单和原生轮播操作保留。
 
-轻点右键保持原网页菜单行为。划动不足 56 CSS 像素不触发；斜划、上划、明显回折、超过 5 秒、释放在窗口外都会取消。Esc、窗口失焦或指针取消也会取消手势，Esc 不会顺带关闭笔记。输入框内或按住 Shift/Ctrl/Alt/Win 时不启用手势。
-
-设置中可关闭“启用右键手势”。当前图片无法确认时不会猜测下载，会提示使用侧栏选图。快速保存同一笔记的不同图片可分别排队；正在排队的同一张会拦截重复添加。
+“大家都在搜/相关搜索”的推荐卡片保留，点击图片或词条会发起普通关键词搜索；笔记链接和搜索页其他入口维持原有交互。
 
 ## 帖子素材视图
 
 打开图片帖后默认展示网格。点击图片卡片勾选，双击或点“放大”预览；底部下载选中的图片，LIVE 开关与右侧栏共用。预览中用 ← → 切换、下载当前一张；Esc 先关预览，再按返回搜索。图片原序号与 Live 配对沿用原有下载逻辑，高清源仍在实际下载时获取。
 
 - 右上角“轮播视图”回到原详情；再点“素材网格”可返回。设置可关闭“帖子默认使用素材网格”，也可“显示原网页”。
-- 视频帖和无法读取的帖子保留原生页面；检测到登录或验证弹窗时优先让出界面。
+- 视频帖保留原生播放并提供页内下载，无法读取的帖子保留原生页面；检测到登录或验证弹窗时优先让出界面。
 - 网格按可见行回收卡片，缩略图接近视口才加载；大图只按需预览一张，关闭/离开时释放图片引用和观察器。
 - 布局使用 Shadow DOM 隔离网站样式。原详情暂时隐藏并禁用交互，视频暂停；返回时恢复原生关闭以保留搜索位置。原网页 DOM 仍保留，不承诺 WebView2 立刻归还全部进程内存。
 - 直接打开帖子有最长一秒的原详情显示过渡保护，读取失败会放行，避免留下空白遮罩。
@@ -124,7 +118,7 @@ git clone https://github.com/hanpeiyu/stilldock.git
 cd stilldock
 cargo fmt --check
 cargo test --locked
-node --test tests/site.test.cjs tests/panel.test.cjs tests/search.test.cjs tests/bootstrap.test.cjs tests/focus.test.cjs tests/navigation.test.cjs tests/gestures.test.cjs tests/materials.test.cjs
+node --test tests/site.test.cjs tests/panel.test.cjs tests/search.test.cjs tests/bootstrap.test.cjs tests/focus.test.cjs tests/navigation.test.cjs tests/materials.test.cjs tests/video.test.cjs tests/related-search.test.cjs
 cargo build --release --locked
 ```
 

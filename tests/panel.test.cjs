@@ -91,3 +91,10 @@ test('material selection mirrors into sidebar without echo and sidebar changes s
   p.elements.get('select-none').onclick();assert.deepEqual(p.sent.at(-1).indices,[]);
   p.elements.get('material_view').checked=false;p.elements.get('material_view').onchange();assert.deepEqual(p.sent.at(-1),{action:'setting',key:'material_view',value:false});
 });
+
+test('task panel folds duplicate grid controls, preserves manual expansion and restores native fallback',()=>{
+  const p=panel(),note={id:'note',assets:[]};p.snapshot(note,{workspace_mode:'grid'});assert.equal(p.elements.get('note-tools').open,false);assert.equal(p.elements.get('workspace-hint').hidden,false);
+  p.elements.get('note-tools').open=true;p.snapshot(note,{workspace_mode:'grid'});assert.equal(p.elements.get('note-tools').open,true);
+  p.snapshot(note,{workspace_mode:'video'});assert.equal(p.elements.get('note-tools').open,false);
+  p.snapshot(note,{workspace_mode:'native'});assert.equal(p.elements.get('note-tools').open,true);p.snapshot({});assert.equal(p.elements.get('note-tools').hidden,true);
+});

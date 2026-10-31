@@ -80,3 +80,9 @@ Selection is shared through `material_selection`/panel `selection` IPC and snaps
 Jobs freeze `force` policy. Transfers reuse intact history unless forced, while own complete records remain resumable in either policy. File rows additionally record SHA-256. A typed transfer error restricts bounded retry to network/body and selected 5xx errors, with cancellation-aware backoff. Hashing includes a streamed existing prefix for Range resume. Source refresh matches normalized media and original numbering; it neither starts jobs nor substitutes edited images.
 
 `partial_sources` stores source URL and ETag per job/index/quality candidate. A changed source restarts the candidate rather than mixing bytes; known ETags supply If-Range. The source marker is updated only after opening/truncating the partial succeeds. Refreshing a payload remembers the previous source before replacing signed URLs.
+
+## Interaction ownership
+
+Grid/video views own primary page actions; the panel receives workspace mode and folds duplicate controls while retaining an independent fallback. Note extraction/reporting is isolated from view adapter failures. Window-capture Escape handlers consume one key press through release, with preview-first navigation and a dialog cancel/backdrop guard. No right-button gesture runtime remains.
+
+`video.js` preserves native playback and sends the same validated download IPC. `search-links.js` recognizes related-search cards only; Rust builds a plain fixed-origin keyword URL, avoiding AI-route flags without hijacking normal note links or search tabs. The hidden native fixture includes site-like Escape handlers to detect event leakage, video download and related-keyword IPC.

@@ -17,7 +17,7 @@
 ```powershell
 cargo fmt --check
 cargo test --locked
-node --test tests/site.test.cjs tests/panel.test.cjs tests/search.test.cjs tests/bootstrap.test.cjs tests/focus.test.cjs tests/navigation.test.cjs tests/gestures.test.cjs
+node --test tests/site.test.cjs tests/panel.test.cjs tests/search.test.cjs tests/bootstrap.test.cjs tests/focus.test.cjs tests/navigation.test.cjs tests/materials.test.cjs tests/video.test.cjs tests/related-search.test.cjs
 cargo build --release --locked
 .\target\release\xhs-browser.exe
 ```
@@ -54,10 +54,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package.ps1
 
 首次仓库发布使用预览版，不能据此推断真实网站或所有 Win10 机器均已验证。
 
-## 隐藏 WebView2 手势集成测试
+## 隐藏 WebView2 交互测试
 
 ```powershell
-cargo run --example gesture_smoke --locked
+cargo run --example material_smoke --locked
 ```
 
-使用本机 WebView2，窗口隐藏、不启动 Chrome，不访问真实账号或下载平台素材。测试注入模拟 PointerEvent，检查真实 DOM、菜单事件取消、Esc、当前图序号、Live 数据与原生 IPC；它不能代替物理鼠标/触摸板的菜单时序验收。独立测试资料写入被 Git 忽略的 `target/gesture-smoke-profile`，不使用应用登录资料。CI 通过 `scripts/ensure-webview2.ps1` 检查测试运行时，缺少时安装经微软签名校验的官方 Runtime。
+使用本机 WebView2 隐藏窗口，不启动 Chrome、不访问真实账号，fixture CSP 禁止远程图片。检查网格布局与回收、Esc 按下/重复/松开的逐级返回、预览外围点击、原生关闭、视频按钮和相关词搜索的原生 IPC。资料写入忽略的 `target/material-smoke-profile`，不使用应用登录目录。CI 使用 `scripts/ensure-webview2.ps1` 准备经微软签名校验的 Runtime。

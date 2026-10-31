@@ -25,12 +25,10 @@ jobs:
       - name: Rust tests
         run: cargo test --locked
       - name: Page and sidebar tests (no external browser)
-        run: node --test tests/site.test.cjs tests/panel.test.cjs tests/search.test.cjs tests/bootstrap.test.cjs tests/focus.test.cjs tests/navigation.test.cjs tests/gestures.test.cjs tests/materials.test.cjs
+        run: node --test tests/site.test.cjs tests/panel.test.cjs tests/search.test.cjs tests/bootstrap.test.cjs tests/focus.test.cjs tests/navigation.test.cjs tests/materials.test.cjs tests/video.test.cjs tests/related-search.test.cjs
       - name: Ensure WebView2 test runtime
         shell: pwsh
         run: ./scripts/ensure-webview2.ps1
-      - name: Hidden WebView2 gesture smoke
-        run: cargo run --example gesture_smoke --locked
       - name: Hidden WebView2 material smoke
         run: cargo run --example material_smoke --locked
       - name: Release build

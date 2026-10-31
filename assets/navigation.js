@@ -1,7 +1,7 @@
 // Persistent in-page return controls; independent of the focus-mode layout.
 (() => {
   if (window.top !== window || !/(^|\.)xiaohongshu\.com$/.test(location.hostname) || window.__stillDockNavigation) return;
-  let button, busy = false, cameFromList = false, scheduled;
+  let button, busy = false, cameFromList = false, scheduled, escapeHeld=false;
   const key = 'stilldock.returnUrl';
   const noteRoute = raw => {
     try {
@@ -87,14 +87,20 @@
     };
   }
   addEventListener('popstate', sync);
-  document.addEventListener('keydown', event => {
-    if (event.key !== 'Escape' || event.isComposing) return;
-    if (window.__stillDockGestures?.cancelActive?.()) {event.preventDefault();event.stopImmediatePropagation();return;}
-    if(window.__stillDockMaterial?.closePreview?.()){event.preventDefault();event.stopImmediatePropagation();return;}
-    if (!noteOpen()) return;
-    event.preventDefault(); event.stopImmediatePropagation(); back();
-  }, true);
-  window.__stillDockNavigation = {back, sync, isOpen:noteOpen};
+  // Capture at window before site handlers; one physical press must dismiss only one layer.
+  function stop(event){event.preventDefault();event.stopImmediatePropagation();}
+  addEventListener('keydown', event => {
+    if(event.key!=='Escape'||event.isComposing)return;
+    if(escapeHeld){stop(event);return;}
+    if(!window.__stillDockMaterial?.isPreviewOpen?.()&&!noteOpen())return;
+    escapeHeld=true;stop(event);
+    if(event.repeat)return;
+    if(window.__stillDockMaterial?.closePreview?.())return;
+    back();
+  },true);
+  addEventListener('keyup',event=>{if(event.key==='Escape'&&escapeHeld){stop(event);escapeHeld=false;}},true);
+  addEventListener('blur',()=>{escapeHeld=false;});
+  window.__stillDockNavigation = {back, sync, isOpen:noteOpen,suppressEscapeRelease(){escapeHeld=true;}};
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount, {once:true});
   else mount();
 })();

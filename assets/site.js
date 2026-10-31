@@ -51,7 +51,7 @@
     const q=s=>document.querySelector(s),text=s=>(q(s)?.textContent||'').trim();
     const source=new URL(location.href);
     if(id&&!pathId)source.pathname='/explore/'+id;
-    const result={id,title:note?.title||text('#detail-title')||document.title,author:note?.user?.nickname||text('.author .username'),url:source.href,cover:'',image_count:note?.imageList?.length||0,assets:[]};
+    const result={id,title:note?.title||text('#detail-title')||document.title,author:note?.user?.nickname||text('.author .username'),url:source.href,cover:'',image_count:note?.imageList?.length||0,media_type:note?.type||'',assets:[]};
     const https=u=>{if(typeof u!=='string'||! /^(?:https?:)?\/\//i.test(u))return '';try{const value=new URL(u.replace(/^http:/,'https:'),location.href);return value.protocol==='https:'&&/(^|\.)(xhscdn|xiaohongshu)\.com$/.test(value.hostname)?value.href:'';}catch{return '';}};
     function bestStream(stream){
       const entries=Object.values(unwrap(stream)||{}).flat().filter(v=>v&&typeof v==='object');
@@ -90,28 +90,14 @@
     if(!id){result.assets=[];result.title='';result.author='';}
     return result;
   };
-  window.__xhsReadCurrentImage = () => {
-    const material=window.__stillDockMaterial?.currentImage?.();if(material)return material;
-    const note=window.__xhsReadNote();
-    if(!note.id||!note.assets.length||note.assets.some(a=>a.video))return {error:'请先打开一篇图片笔记'};
-    const media=document.querySelector('#noteContainer .media-container,.note-detail-mask .media-container');
-    if(!media||!media.getClientRects().length||getComputedStyle(media).visibility==='hidden')return {error:'请先打开一篇图片笔记'};
-    if(note.assets.length===1&&note.image_count===1)return {note,index:0};
-    const active=media?.querySelector('.swiper-slide-active');
-    const raw=active?.getAttribute('data-swiper-slide-index');
-    if(raw!==null&&raw!==undefined&&/^\d+$/.test(raw)){const sequence=Number(raw)+1,index=note.assets.findIndex((asset,i)=>(asset.sequence||i+1)===sequence);if(index>=0)return {note,index};}
-    function identity(raw){try{const u=new URL(raw),parts=u.pathname.split('/').filter(Boolean);return (/^sns-webpic-/.test(u.hostname)?parts.slice(2):parts).join('/').split('!')[0];}catch{return '';}}
-    const img=active?.querySelector('img');
-    const token=identity(img?.currentSrc||img?.src||'');
-    if(token){const matches=note.assets.map((asset,index)=>({asset,index})).filter(({asset})=>[asset.url,asset.preview,asset.original_url].some(url=>url&&identity(url)===token));if(matches.length===1)return {note,index:matches[0].index};}
-    const counter=media?.querySelector('.swiper-pagination-current');
-    const number=Number(counter?.textContent?.trim());
-    if(Number.isInteger(number)&&number>=1){const index=note.assets.findIndex((asset,i)=>(asset.sequence||i+1)===number);if(index>=0)return {note,index};}
-    return {error:'暂时无法确认当前图片，请使用侧栏选图'};
-  };
   function report(){
     searchRoute();
-    try{const note=window.__xhsReadNote();window.__stillDockMaterial?.update(note);const value=JSON.stringify({kind:'page',note});if(value!==last){last=value;send(JSON.parse(value));}}catch{}
+    let note;try{note=window.__xhsReadNote();}catch{return;}
+    // A layout adapter failure must not prevent the native download panel receiving source data.
+    try{window.__stillDockMaterial?.update(note);}catch{try{window.__stillDockMaterial?.fallback?.(note);}catch{}}
+    try{window.__stillDockVideo?.update(note);}catch{try{window.__stillDockVideo?.hide?.();}catch{}}
+    const workspace=window.__stillDockMaterial?.isOpen?.()?'grid':window.__stillDockVideo?.isOpen?.()?'video':'native';
+    const value=JSON.stringify({kind:'page',note,workspace});if(value!==last){last=value;send(JSON.parse(value));}
   }
   function schedule(){if(!timer)timer=setTimeout(()=>{timer=null;report();},180);}
   const originalPush=history.pushState,originalReplace=history.replaceState;
